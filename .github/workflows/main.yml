@@ -1,92 +1,618 @@
 name: Harness
 
 on:
+  # Manual trigger (must be first for GitHub to detect workflow_dispatch)
   workflow_dispatch:
     inputs:
-      issue_number:
-        description: 'Issue number to auto-implement' 
+      pr_number:
+        description: 'PR number to run harness on'
         required: true
         type: string
-      base_branch:
-        description: 'Base branch to merge into' 
+      max_iterations:
+        description: 'Maximum harness iterations'
         required: false
-        default: 'develop'
+        default: '5'
         type: string
-  issues:
-    types: [opened, edited]
-  pull_request:
-    types: [opened, synchronize, edited]
+
+  # Harness is triggered by:
+  # 1. auto-scheduler.yml idle PR check (after Copilot finishes)
+  # 2. Manual dispatch
 
 concurrency:
-  group: harness-${{ github.event.issue.number || github.event.pull_request.number }}
+  group: harness-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
-  issue-to-branch:
-    if: github.event_name == 'issues' || github.event_name == 'workflow_dispatch'
+  # ═══════════════════════════════════════════════════════════════
+  # Job A: Harness Loop (generate → verify → evaluate)
+  # ═══════════════════════════════════════════════════════════════
+  harness:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     permissions:
       contents: write
       pull-requests: write
       issues: write
+      id-token: write
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install Python dependencies
-        run: python -m pip install --upgrade pip requests
-
-      - name: Run Issue-to-Branch Automation
+      # ── 1. Resolve PR and Issue ──
+      - name: Resolve PR number
+        id: pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
         run: |
-          ISSUE_NUMBER="${{ github.event.number || github.event.inputs.issue_number }}"
-          BASE_BRANCH="${{ github.event.inputs.base_branch || 'develop' }}"
-          python3 issue_to_branch.py --issue-number "$ISSUE_NUMBER" --repo "${{ github.repository }}" --base "$BASE_BRANCH" --token "$GITHUB_TOKEN" --opencode-key "$OPENCODE_API_KEY"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PR_NUM="${{ inputs.pr_number }}"
+          else
+            PR_NUM="${{ github.event.pull_request.number }}"
+          fi
+          echo "number=$PR_NUM" >> "$GITHUB_OUTPUT"
 
-  review-and-merge:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-    steps:
-      - name: Checkout PR branch
+          # Get PR details (include closingIssuesReferences for API-linked issues)
+          PR_JSON=$(gh pr view "$PR_NUM" --repo "${{ github.repository }}" \
+            --json body,headRefName,baseRefName,title,closingIssuesReferences)
+
+          HEAD_REF=$(echo "$PR_JSON" | jq -r '.headRefName')
+          TITLE=$(echo "$PR_JSON" | jq -r '.title')
+          BODY=$(echo "$PR_JSON" | jq -r '.body // ""')
+
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+
+          # Debug: show what we got
+          echo "PR HEAD_REF=$HEAD_REF TITLE=$TITLE"
+          echo "PR BODY length: ${#BODY}"
+          echo "PR BODY preview: $(echo "$BODY" | head -15)"
+
+          # Extract linked issue number:
+          # 1. Try closingIssuesReferences (GitHub API linking, used by Copilot)
+          ISSUE_NUM=$(echo "$PR_JSON" | jq -r '(.closingIssuesReferences // [] | .[0].number // empty)' 2>/dev/null || echo "")
+
+          # 2. Fallback: grep PR body for "Closes #N" / "Fixes #N" / "Resolves #N"
+          if [ -z "$ISSUE_NUM" ]; then
+            ISSUE_NUM=$(echo "$BODY" | grep -oP '(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#\K\d+' | head -1)
+          fi
+          if [ -z "$ISSUE_NUM" ]; then
+            ISSUE_NUM=$(echo "$BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+' | grep -oE '[0-9]+' | head -1)
+          fi
+
+          if [ -z "$ISSUE_NUM" ]; then
+            echo "::warning::No linked issue found (no closingIssuesReferences and no 'Closes #N' in body). Skipping harness."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Found linked issue #$ISSUE_NUM"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$ISSUE_NUM" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch issue spec
+        if: steps.pr.outputs.skip != 'true'
+        id: spec
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
+          INPUT_MAX_ITERATIONS: ${{ inputs.max_iterations || '' }}
+        run: |
+          ISSUE_NUM="${{ steps.pr.outputs.issue_number }}"
+          ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "${{ github.repository }}" \
+            --json body -q '.body // ""')
+
+          # Save spec to file (avoids shell escaping issues)
+          echo "$ISSUE_BODY" > /tmp/issue-spec.md
+          echo "spec_file=/tmp/issue-spec.md" >> "$GITHUB_OUTPUT"
+
+          # Extract max_iterations from issue body
+          # Supports: "max_iterations: 3" or "### Harness 最大迭代次数\n\n3" (GitHub form)
+          # Priority: workflow_dispatch input > issue body > default 5
+          if [ -n "$INPUT_MAX_ITERATIONS" ]; then
+            echo "max_iterations=$INPUT_MAX_ITERATIONS" >> "$GITHUB_OUTPUT"
+          else
+            # Try "max_iterations: N" format
+            ISSUE_MAX=$(echo "$ISSUE_BODY" | grep -oiE 'max_iterations:\s*[0-9]+' | grep -oE '[0-9]+' | head -1 || echo "")
+            # Try GitHub form format: line after "Harness" header containing just a number
+            if [ -z "$ISSUE_MAX" ]; then
+              ISSUE_MAX=$(echo "$ISSUE_BODY" | grep -A2 -i '最大迭代次数\|max.iterations' | grep -oE '^[0-9]+$' | head -1 || echo "")
+            fi
+            if [ -n "$ISSUE_MAX" ]; then
+              echo "max_iterations=$ISSUE_MAX" >> "$GITHUB_OUTPUT"
+              echo "Using max_iterations=$ISSUE_MAX from issue body"
+            else
+              echo "max_iterations=5" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      # ── 2. Checkout and Setup ──
+      - name: Checkout repository
+        if: steps.pr.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.COPILOT_PAT }}
 
-      - name: Setup GitHub CLI
-        uses: cli/cli-action@v2
+      - name: Configure git
+        if: steps.pr.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Ensure develop ref is available for diff comparison
+          git fetch origin develop:develop 2>/dev/null || true
+
+      - name: Setup Bun
+        if: steps.pr.outputs.skip != 'true'
+        uses: oven-sh/setup-bun@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          bun-version: '1.3.11'
 
-      - name: Detect package manager
-        id: detect
-        run: |
-          if [ -f package.json ]; then echo "name=node"; else if [ -f yarn.lock ]; then echo "name=node"; elif [ -f bun.lock ]; then echo "name=bun"; else echo "name=none"; fi; fi
+      - name: Cache Bun dependencies
+        if: steps.pr.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+
       - name: Install dependencies
-        if: steps.detect.outputs.name != 'none'
+        if: steps.pr.outputs.skip != 'true'
+        run: bun install
+
+      # ── 2b. Rebase onto develop (resolve conflicts via generator if needed) ──
+      - name: Rebase PR branch onto develop
+        if: steps.pr.outputs.skip != 'true'
+        id: conflicts
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
         run: |
-          if [ -f package.json ]; then npm ci; fi
-          if [ -f bun.lock ]; then bun install; fi
-          if [ -f yarn.lock ]; then yarn install; fi
-      - name: Run linters and tests
-        run: |
-          TIMEDOUT=0
-          if [ -f package.json ]; then
-            npm run lint || TIMEDOUT=$?; 
-            npm run test -- --ci || TIMEDOUT=$((TIMEDOUT + 0));
+          PR_NUM="${{ steps.pr.outputs.number }}"
+
+          # Try rebasing PR commits onto latest develop
+          if git rebase origin/develop 2>/dev/null; then
+            echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
+            echo "Rebased cleanly onto develop"
+            git push --force-with-lease || true
+          else
+            # Rebase stopped at a conflict — collect conflicting files for the generator
+            CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
+            # Abort the partial rebase so the working tree is clean for the generator
+            git rebase --abort 2>/dev/null || true
+            echo "has_conflicts=true" >> "$GITHUB_OUTPUT"
+            echo "conflict_files<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$CONFLICT_FILES" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "::warning::PR #$PR_NUM has rebase conflicts with develop — generator will resolve them"
+            echo "Conflicting files:"
+            echo "$CONFLICT_FILES"
           fi
-          if [ $TIMEDOUT -ne 0 ]; then echo "Lint/Test failed"; exit 1; fi
-      - name: Auto-merge if pass
-        if: ${{ success() }}
+
+      # ── 3. Transition issue status + clean up previous harness labels ──
+      - name: Transition issue to review
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
         run: |
-          gh pr merge ${{ github.event.pull_request.number }} --merge --repo "${{ github.repository }}" || true
+          ISSUE_NUM="${{ steps.pr.outputs.issue_number }}"
+          PR_NUM="${{ steps.pr.outputs.number }}"
+
+          # Transition issue
+          gh issue edit "$ISSUE_NUM" --repo "${{ github.repository }}" \
+            --remove-label "status::doing" \
+            --add-label "status::review" || true
+
+          # Remove previous harness labels from PR (re-run scenario)
+          gh issue edit "$PR_NUM" --repo "${{ github.repository }}" \
+            --remove-label "harness::failed" --remove-label "harness::passed" 2>/dev/null || true
+
+      # ── 4. Harness Iteration Loop ──
+      - name: Run harness loop
+        if: steps.pr.outputs.skip != 'true'
+        id: harness
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          MAX_ITERATIONS: ${{ steps.spec.outputs.max_iterations }}
+          PR_NUM: ${{ steps.pr.outputs.number }}
+          ISSUE_NUM: ${{ steps.pr.outputs.issue_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set +e  # Don't exit on error — we handle failures in the loop
+
+          ITERATION=0
+          FINAL_VERDICT="fail"
+          FEEDBACK=""
+          SPEC=$(cat /tmp/issue-spec.md)
+          REPORT_LINES=""  # Accumulated report for single comment
+          HARNESS_MARKER="<!-- harness-report -->"
+
+          # Truncate helper: last N lines of input
+          truncate_output() {
+            local input="$1"
+            local max_lines="${2:-100}"
+            local line_count=$(echo "$input" | wc -l)
+            if [ "$line_count" -gt "$max_lines" ]; then
+              echo "... (truncated, showing last $max_lines of $line_count lines)"
+              echo "$input" | tail -n "$max_lines"
+            else
+              echo "$input"
+            fi
+          }
+
+          # Helper: post comment to PR
+          pr_comment() {
+            gh pr comment "$PR_NUM" --repo "$REPO" --body "$1" || true
+          }
+
+          while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
+            ITERATION=$((ITERATION + 1))
+            START_TIME=$(date +%s)
+            echo ""
+            echo "══════════════════════════════════════════════════"
+            echo "  HARNESS ITERATION $ITERATION / $MAX_ITERATIONS"
+            echo "══════════════════════════════════════════════════"
+
+            # ═══ COMMENT 1: Task (what this iteration will do) ═══
+            TASK_DIFF_BASE="develop"
+            if ! git rev-parse --verify develop >/dev/null 2>&1; then
+              TASK_DIFF_BASE="origin/develop"
+            fi
+            CHANGED_FILES=$(git diff "$TASK_DIFF_BASE"...HEAD --name-only 2>/dev/null || echo "(unable to diff)")
+            if [ "$ITERATION" -eq 1 ]; then
+              CONFLICT_NOTE=""
+              if [ "${{ steps.conflicts.outputs.has_conflicts }}" = "true" ]; then
+                CONFLICT_NOTE=$(printf '\n\n⚠️ **Rebase conflicts detected** — generator will resolve before verify:\n```\n%s\n```' "${{ steps.conflicts.outputs.conflict_files }}")
+              fi
+              TASK_BODY=$(printf '### 🔄 Harness Iteration %s / %s — Task\n\n**Phase:** Verify initial implementation%s\n\n**Changed files:**\n```\n%s\n```\n\n**Spec (from issue #%s):**\n<details><summary>展开</summary>\n\n%s\n\n</details>' \
+                "$ITERATION" "$MAX_ITERATIONS" "$CONFLICT_NOTE" "$CHANGED_FILES" "$ISSUE_NUM" "$SPEC")
+            else
+              VERIFY_SUMMARY=$(cat /tmp/verify-report.json 2>/dev/null | jq -r '"lint:\(.lint.pass) types:\(.types.pass) tests:\(.tests.pass)"' 2>/dev/null || echo "N/A")
+              TASK_BODY=$(printf '### 🔄 Harness Iteration %s / %s — Task\n\n**Phase:** Generator fix (claude-opus-4-6)\n\n**Previous verify:** `%s`\n\n**Previous feedback:**\n> %s\n\n**Generator instructions:** Fix all issues above. Make minimal changes.' \
+                "$ITERATION" "$MAX_ITERATIONS" "$VERIFY_SUMMARY" "$FEEDBACK")
+            fi
+            pr_comment "$TASK_BODY"
+
+            # ─── a. GENERATOR (iteration 2+ OR merge conflicts on iteration 1) ───
+            HAS_CONFLICTS="${{ steps.conflicts.outputs.has_conflicts }}"
+            CONFLICT_FILES="${{ steps.conflicts.outputs.conflict_files }}"
+            RUN_GENERATOR=false
+            if [ "$ITERATION" -gt 1 ]; then
+              RUN_GENERATOR=true
+            elif [ "$HAS_CONFLICTS" = "true" ]; then
+              RUN_GENERATOR=true
+            fi
+
+            if [ "$RUN_GENERATOR" = "true" ]; then
+              echo "::group::Generator (iteration $ITERATION)"
+
+              # Build conflict section for prompt
+              CONFLICT_SECTION=""
+              if [ "$HAS_CONFLICTS" = "true" ] && [ -n "$CONFLICT_FILES" ]; then
+                # Capture develop's version of conflicting files for context
+                DEVELOP_DIFF=$(git diff origin/develop -- $CONFLICT_FILES 2>/dev/null | head -200 || true)
+                CONFLICT_SECTION=$(cat <<CONFLICT_EOF
+
+          ## Rebase Conflicts with develop
+          Rebasing onto develop failed. The following files conflict:
+          $CONFLICT_FILES
+
+          The develop branch has changes to these files that conflict with this PR's changes.
+          Here is the diff between this branch and develop for the conflicting files:
+          \`\`\`diff
+          $DEVELOP_DIFF
+          \`\`\`
+
+          You MUST update these files to be compatible with develop's latest version.
+          After your changes, the branch must be rebaseable onto develop.
+          CONFLICT_EOF
+                )
+              fi
+
+              GENERATOR_PROMPT=$(cat <<GENPROMPT_EOF
+          You are a code generator fixing issues in a Turborepo monorepo (Bun + Next.js + Electron).
+
+          ## Issue Spec (this is the requirements document)
+          $SPEC
+
+          ## Previous Evaluator Feedback
+          $FEEDBACK
+
+          ## Verification Report
+          $(cat /tmp/verify-report.json 2>/dev/null || echo '{}')
+          $CONFLICT_SECTION
+
+          ## Instructions
+          Fix ALL issues identified by the evaluator and verification report. Focus on:
+          1. Resolving any rebase conflicts with develop (see conflict section above)
+          2. Making \`bun run lint\` pass (ESLint with --max-warnings 0)
+          3. Making \`bun run check-types\` pass (TypeScript strict mode)
+          4. Making \`bun run test:coverage\` pass
+          5. Addressing spec requirements from the issue
+
+          Make the minimal changes needed. Do not refactor unrelated code.
+          GENPROMPT_EOF
+              )
+
+              echo "$GENERATOR_PROMPT" | npx -y @anthropic-ai/claude-code --print \
+                --model claude-opus-4-6 \
+                --dangerously-skip-permissions || true
+
+              # Commit and push generator changes
+              git add -A
+              if ! git diff --cached --quiet; then
+                git commit -m "harness: iteration $ITERATION fixes" || true
+                echo "Generator committed changes"
+              else
+                echo "Generator made no file changes"
+              fi
+
+              # Attempt rebase onto develop and push
+              if git rebase origin/develop 2>/dev/null; then
+                git push --force-with-lease || true
+                echo "Rebased and pushed successfully"
+                # Clear conflict flag for subsequent iterations
+                HAS_CONFLICTS=false
+              else
+                git rebase --abort 2>/dev/null || true
+                git push --force-with-lease || true
+                echo "::warning::Rebase still fails after generator — pushing as-is for next iteration"
+              fi
+
+              echo "::endgroup::"
+            fi
+
+            # ─── b. VERIFY ───
+            echo "::group::Verify (iteration $ITERATION)"
+
+            bun install --frozen-lockfile 2>/dev/null || bun install
+
+            LINT_EXIT=0; TYPES_EXIT=0; TESTS_EXIT=0
+            LINT_OUT=$(bun run lint 2>&1) || LINT_EXIT=$?
+            TYPES_OUT=$(bun run check-types 2>&1) || TYPES_EXIT=$?
+            TESTS_OUT=$(bun run test:coverage 2>&1) || TESTS_EXIT=$?
+
+            LINT_PASS=$([ "$LINT_EXIT" -eq 0 ] && echo "true" || echo "false")
+            TYPES_PASS=$([ "$TYPES_EXIT" -eq 0 ] && echo "true" || echo "false")
+            TESTS_PASS=$([ "$TESTS_EXIT" -eq 0 ] && echo "true" || echo "false")
+            ALL_PASS=$([ "$LINT_EXIT" -eq 0 ] && [ "$TYPES_EXIT" -eq 0 ] && [ "$TESTS_EXIT" -eq 0 ] && echo "true" || echo "false")
+
+            LINT_TRUNCATED=$(truncate_output "$LINT_OUT" 50)
+            TYPES_TRUNCATED=$(truncate_output "$TYPES_OUT" 50)
+            TESTS_TRUNCATED=$(truncate_output "$TESTS_OUT" 50)
+
+            cat > /tmp/verify-report.json <<VERIFY_EOF
+          {
+            "iteration": $ITERATION,
+            "lint": {
+              "pass": $LINT_PASS,
+              "output": $(echo "$LINT_TRUNCATED" | jq -Rs .)
+            },
+            "types": {
+              "pass": $TYPES_PASS,
+              "output": $(echo "$TYPES_TRUNCATED" | jq -Rs .)
+            },
+            "tests": {
+              "pass": $TESTS_PASS,
+              "output": $(echo "$TESTS_TRUNCATED" | jq -Rs .)
+            },
+            "all_pass": $ALL_PASS
+          }
+          VERIFY_EOF
+
+            echo "Lint: $LINT_PASS | Types: $TYPES_PASS | Tests: $TESTS_PASS | All: $ALL_PASS"
+            echo "::endgroup::"
+
+            # ─── c. EVALUATE ───
+            echo "::group::Evaluate (iteration $ITERATION)"
+
+            # Use develop or origin/develop for diff base
+            DIFF_BASE="develop"
+            if ! git rev-parse --verify develop >/dev/null 2>&1; then
+              DIFF_BASE="origin/develop"
+            fi
+            DIFF_FULL=$(git diff "$DIFF_BASE"...HEAD 2>/dev/null | head -8000 || echo "Unable to compute diff")
+            CHANGED_FILES=$(git diff "$DIFF_BASE"...HEAD --name-only 2>/dev/null || echo "")
+            echo "Diff base: $DIFF_BASE | Changed files: $(echo "$CHANGED_FILES" | wc -l | tr -d ' ')"
+
+            EVAL_PROMPT=$(cat <<EVALPROMPT_EOF
+          You are a strict code evaluator. Review the implementation against the spec.
+
+          ## Issue Spec (this IS the requirements)
+          $SPEC
+
+          ## Changed Files
+          $CHANGED_FILES
+
+          ## Code Changes (full diff from develop)
+          $DIFF_FULL
+
+          ## Verification Report
+          $(cat /tmp/verify-report.json)
+
+          ## Evaluation Rules
+          1. If ANY verification check (lint, types, tests) failed, the verdict MUST be "fail"
+          2. If all checks pass, evaluate whether the code changes satisfy the spec requirements
+          3. Check EACH acceptance criterion from the spec individually
+          4. Be strict but fair — minor style issues are acceptable if functionality is correct
+
+          ## Required Output Format
+          Respond with ONLY a valid JSON object, no other text:
+          {
+            "verdict": "pass or fail",
+            "feedback": "Summary of evaluation",
+            "checklist": [
+              {"item": "acceptance criterion text", "passed": true, "note": "why passed/failed"}
+            ]
+          }
+          The checklist array MUST contain one entry for each acceptance criterion from the spec.
+          Each item.passed is true if the criterion is met, false otherwise.
+          EVALPROMPT_EOF
+            )
+
+            EVAL_RAW=$(echo "$EVAL_PROMPT" | npx -y @anthropic-ai/claude-code --print \
+              --model claude-sonnet-4-6 2>/dev/null || echo '{"verdict":"fail","feedback":"Evaluator failed to run","checklist":[]}')
+
+            # Save raw output for debugging
+            echo "$EVAL_RAW" > /tmp/eval-raw.txt
+
+            # Extract JSON from evaluator output (handles markdown fences, preamble text, nested objects)
+            EVAL_JSON=""
+
+            # Try 1: direct parse (output is pure JSON)
+            EVAL_JSON=$(echo "$EVAL_RAW" | jq -c 'select(.verdict)' 2>/dev/null || echo "")
+
+            # Try 2: strip markdown code fences, then parse
+            if [ -z "$EVAL_JSON" ]; then
+              EVAL_JSON=$(echo "$EVAL_RAW" | sed '/^```/d' | jq -c 'select(.verdict)' 2>/dev/null || echo "")
+            fi
+
+            # Try 3: extract from first { to last } (handles preamble/suffix text)
+            if [ -z "$EVAL_JSON" ]; then
+              # Use python/perl for robust brace matching; fall back to sed
+              EXTRACTED=$(python3 -c "
+            import sys, json, re
+            raw = sys.stdin.read()
+            # Find first { and last }
+            start = raw.find('{')
+            end = raw.rfind('}')
+            if start >= 0 and end > start:
+                candidate = raw[start:end+1]
+                try:
+                    obj = json.loads(candidate)
+                    if 'verdict' in obj:
+                        print(json.dumps(obj))
+                except: pass
+            " <<< "$EVAL_RAW" 2>/dev/null || echo "")
+              if [ -n "$EXTRACTED" ]; then
+                EVAL_JSON="$EXTRACTED"
+              fi
+            fi
+
+            # Evaluator parse failed — abort immediately
+            if [ -z "$EVAL_JSON" ]; then
+              echo "::error::Failed to parse evaluator JSON. Aborting harness."
+              echo "$EVAL_RAW" | head -30
+              EVAL_JSON='{"verdict":"error","feedback":"Evaluator output unparseable — harness aborted","checklist":[]}'
+            fi
+
+            VERDICT=$(echo "$EVAL_JSON" | jq -r '.verdict // "fail"')
+            FEEDBACK=$(echo "$EVAL_JSON" | jq -r '.feedback // "No feedback provided"')
+
+            # Build checklist markdown from evaluator output
+            CHECKLIST_MD=$(echo "$EVAL_JSON" | jq -r '
+              if .checklist and (.checklist | length > 0) then
+                .checklist[] |
+                if .passed then "- [x] " + .item + (if .note and .note != "" then " — " + .note else "" end)
+                else "- [ ] " + .item + (if .note and .note != "" then " — ⚠️ " + .note else "" end)
+                end
+              else empty end' 2>/dev/null || echo "")
+
+            echo "Verdict: $VERDICT"
+            echo "Feedback: $FEEDBACK"
+            echo "Checklist items: $(echo "$EVAL_JSON" | jq '.checklist | length' 2>/dev/null || echo 0)"
+            echo "::endgroup::"
+
+            # ═══ COMMENT 2: Result (what happened) ═══
+            DURATION=$(( $(date +%s) - START_TIME ))
+            DURATION_MIN=$((DURATION / 60))
+            DURATION_SEC=$((DURATION % 60))
+
+            LINT_ICON=$([ "$LINT_PASS" = "true" ] && echo "✅" || echo "❌")
+            TYPES_ICON=$([ "$TYPES_PASS" = "true" ] && echo "✅" || echo "❌")
+            TESTS_ICON=$([ "$TESTS_PASS" = "true" ] && echo "✅" || echo "❌")
+            VERDICT_ICON=$([ "$VERDICT" = "pass" ] && echo "✅" || echo "❌")
+
+            # Build result with checklist + failed check details
+            FAIL_DETAILS=""
+            if [ "$LINT_PASS" = "false" ]; then
+              FAIL_DETAILS=$(printf '%s\n<details><summary>Lint errors</summary>\n\n```\n%s\n```\n\n</details>\n' "$FAIL_DETAILS" "$LINT_TRUNCATED")
+            fi
+            if [ "$TYPES_PASS" = "false" ]; then
+              FAIL_DETAILS=$(printf '%s\n<details><summary>Type errors</summary>\n\n```\n%s\n```\n\n</details>\n' "$FAIL_DETAILS" "$TYPES_TRUNCATED")
+            fi
+            if [ "$TESTS_PASS" = "false" ]; then
+              FAIL_DETAILS=$(printf '%s\n<details><summary>Test failures</summary>\n\n```\n%s\n```\n\n</details>\n' "$FAIL_DETAILS" "$TESTS_TRUNCATED")
+            fi
+
+            # Build checklist section
+            CHECKLIST_SECTION=""
+            if [ -n "$CHECKLIST_MD" ]; then
+              CHECKLIST_SECTION=$(printf '\n**Acceptance Criteria:**\n%s\n' "$CHECKLIST_MD")
+            fi
+
+            RESULT_BODY=$(printf '### %s Harness Iteration %s / %s — Result\n\n| Check | Result |\n|-------|--------|\n| Lint | %s |\n| Types | %s |\n| Tests | %s |\n%s\n\n**Verdict:** %s %s\n**Duration:** %sm %ss\n\n**Evaluator feedback:**\n> %s\n%s' \
+              "$VERDICT_ICON" "$ITERATION" "$MAX_ITERATIONS" \
+              "$LINT_ICON" "$TYPES_ICON" "$TESTS_ICON" \
+              "$CHECKLIST_SECTION" \
+              "$VERDICT_ICON" "$VERDICT" "$DURATION_MIN" "$DURATION_SEC" \
+              "$FEEDBACK" "$FAIL_DETAILS")
+
+            pr_comment "$RESULT_BODY"
+
+            # ─── DECISION ───
+            if [ "$VERDICT" = "pass" ]; then
+              FINAL_VERDICT="pass"
+              echo "✅ Harness PASSED on iteration $ITERATION"
+              break
+            fi
+
+            if [ "$VERDICT" = "error" ]; then
+              FINAL_VERDICT="fail"
+              echo "🛑 Harness ABORTED — evaluator output unparseable"
+              break
+            fi
+
+            if [ "$ITERATION" -eq "$MAX_ITERATIONS" ]; then
+              echo "❌ Harness FAILED after $MAX_ITERATIONS iterations"
+              break
+            fi
+
+            echo "Iteration $ITERATION failed — injecting feedback for next iteration"
+          done
+
+          echo "verdict=$FINAL_VERDICT" >> "$GITHUB_OUTPUT"
+          echo "iterations=$ITERATION" >> "$GITHUB_OUTPUT"
+
+      # ── 5. Post-Loop: Handle Result ──
+      - name: Handle harness pass
+        if: steps.pr.outputs.skip != 'true' && steps.conflicts.outputs.has_conflicts != 'true' && steps.harness.outputs.verdict == 'pass'
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
+        run: |
+          PR_NUM="${{ steps.pr.outputs.number }}"
+          ISSUE_NUM="${{ steps.pr.outputs.issue_number }}"
+          ITERATIONS="${{ steps.harness.outputs.iterations }}"
+
+          # Mark PR as ready for review
+          gh pr ready "$PR_NUM" --repo "${{ github.repository }}" || true
+
+          # Add harness::passed label (timestamp tracked by label creation time)
+          gh issue edit "$PR_NUM" --repo "${{ github.repository }}" \
+            --add-label "harness::passed" || true
+
+          # Post success summary on PR
+          gh pr comment "$PR_NUM" --repo "${{ github.repository }}" \
+            --body "✅ **Harness passed** after $ITERATIONS iteration(s). PR is ready for human review and merge." || true
+
+          echo "::notice::Harness passed — PR #$PR_NUM marked ready for human review"
+
+      - name: Handle harness fail
+        if: steps.pr.outputs.skip != 'true' && steps.conflicts.outputs.has_conflicts != 'true' && steps.harness.outputs.verdict != 'pass'
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
+        run: |
+          PR_NUM="${{ steps.pr.outputs.number }}"
+          ISSUE_NUM="${{ steps.pr.outputs.issue_number }}"
+          ITERATIONS="${{ steps.harness.outputs.iterations }}"
+
+          # Add harness::failed label
+          gh issue edit "$PR_NUM" --repo "${{ github.repository }}" \
+            --add-label "harness::failed" || true
+
+          # Post failure summary on issue
+          gh issue comment "$ISSUE_NUM" --repo "${{ github.repository }}" \
+            --body "❌ **Harness failed** after $ITERATIONS iteration(s). PR #$PR_NUM remains as draft. Use \`@claude-run\` on the PR to manually fix, or re-trigger harness via workflow_dispatch." || true
+
+          # Keep status::review (issue has PR, needs human attention)
+          # Do NOT revert to doing — that would cause scheduler cleanup loop
+
+          echo "::warning::Harness failed — PR #$PR_NUM remains draft, issue stays in review"
+
