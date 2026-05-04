@@ -49,8 +49,8 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           ISSUE_NUMBER="${{ github.event.number || github.event.inputs.issue_number }}"
-          BASE_BRANCH="${{ github.event.inputs.base_branch || 'develop' }}"
-          python3 issue_to_branch.py --issue-number "$ISSUE_NUMBER" --repo "${{ github.repository }}" --base "$BASE_BRANCH" --token "$GITHUB_TOKEN" --opencode-key "$OPENCODE_API_KEY"
+          BASE_BRANCH="${{ github.event.inputs.base_branch || 'main' }}"
+          python3 issue_to_branch.py --issue-number \"$ISSUE_NUMBER\" --repo \"${{ github.repository }}\" --base \"$BASE_BRANCH\" --token \"$GITHUB_TOKEN\" --opencode-key \"$OPENCODE_API_KEY\"
 
   review-and-merge:
     if: github.event_name == 'pull_request'
