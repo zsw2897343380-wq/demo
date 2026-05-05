@@ -18,7 +18,7 @@ on:
     types: [opened, synchronize, edited]
 
 concurrency:
-  group: harness-${{ github.event.issue.number || github.event.pull_request.number }}
+  group: harness-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -49,8 +49,8 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           ISSUE_NUMBER="${{ github.event.number || github.event.inputs.issue_number }}"
-          BASE_BRANCH="${{ github.event.inputs.base_branch || 'main' }}"
-          python3 issue_to_branch.py --issue-number \"$ISSUE_NUMBER\" --repo \"${{ github.repository }}\" --base \"$BASE_BRANCH\" --token \"$GITHUB_TOKEN\" --opencode-key \"$OPENCODE_API_KEY\"
+          BASE_BRANCH="${{ github.event.inputs.base_branch || 'develop' }}"
+          python3 run_issue_to_branch.py --issue-number "$ISSUE_NUMBER" --repo "${{ github.repository }}" --base "$BASE_BRANCH" --token "$GITHUB_TOKEN" --opencode-key "$OPENCODE_API_KEY"
 
   review-and-merge:
     if: github.event_name == 'pull_request'
@@ -73,7 +73,15 @@ jobs:
       - name: Detect package manager
         id: detect
         run: |
-          if [ -f package.json ]; then echo "name=node"; else if [ -f yarn.lock ]; then echo "name=node"; elif [ -f bun.lock ]; then echo "name=bun"; else echo "name=none"; fi; fi
+          if [ -f package.json ]; then
+            echo "name=node" >> "$GITHUB_OUTPUT"
+          elif [ -f yarn.lock ]; then
+            echo "name=node" >> "$GITHUB_OUTPUT"
+          elif [ -f bun.lock ]; then
+            echo "name=bun" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=none" >> "$GITHUB_OUTPUT"
+          fi
       - name: Install dependencies
         if: steps.detect.outputs.name != 'none'
         run: |
@@ -82,12 +90,10 @@ jobs:
           if [ -f yarn.lock ]; then yarn install; fi
       - name: Run linters and tests
         run: |
-          TIMEDOUT=0
           if [ -f package.json ]; then
-            npm run lint || TIMEDOUT=$?; 
-            npm run test -- --ci || TIMEDOUT=$((TIMEDOUT + 0));
+            npm run lint || { echo "Lint failed"; exit 1; }
+            npm run test -- --ci || { echo "Tests failed"; exit 1; }
           fi
-          if [ $TIMEDOUT -ne 0 ]; then echo "Lint/Test failed"; exit 1; fi
       - name: Auto-merge if pass
         if: ${{ success() }}
         run: |
