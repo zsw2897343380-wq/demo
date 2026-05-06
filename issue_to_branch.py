@@ -80,9 +80,10 @@ def main():
     issue_body = issue.get('body', '') or ''
     print(f"Fetched issue #{issue_num}: {len(issue_body)} chars in body")
 
-    # Optional: attempt to generate code via local OpenCode SDK bridge if requested
-    use_sdk = os.environ.get('USE_OPENCODE_SDK', 'false').lower() in ('1', 'true', 'yes')
+    # OpenCode SDK path by default (disable only if explicitly overridden)
+    use_sdk = os.environ.get('USE_OPENCODE_SDK', 'true').lower() in ('1', 'true', 'yes')
     if use_sdk:
+        print("[OpenCode SDK] Using local OpenCode SDK path for code generation (default).")
         try:
             sdk_outdir = generated_code_dir
             sdk_cmd = f"node scripts/opencode_generate.js --issue-number {issue_num} --issue-body {shlex.quote(issue_body)} --outdir {shlex.quote(sdk_outdir)}"
