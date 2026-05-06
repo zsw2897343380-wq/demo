@@ -80,6 +80,9 @@ def main():
     issue_body = issue.get('body', '') or ''
     print(f"Fetched issue #{issue_num}: {len(issue_body)} chars in body")
 
+    # Prepare output directory for generated code and flag for SDK success
+    generated_code_dir = f"auto_impl/issue-{issue_num}"
+    sdk_generated = False
     # OpenCode SDK path by default (disable only if explicitly overridden)
     use_sdk = os.environ.get('USE_OPENCODE_SDK', 'true').lower() in ('1', 'true', 'yes')
     if use_sdk:
@@ -92,6 +95,8 @@ def main():
             if os.path.exists(candidate):
                 with open(candidate, 'r') as f_in, open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w') as f_out:
                     f_out.write(f_in.read())
+                sdk_generated = True
+                print("[OpenCode SDK] Successfully generated code via SDK; auto_generated_code.txt overwritten.")
         except Exception:
             pass
 
@@ -106,7 +111,7 @@ def main():
         'requirements': issue_body,
     }
     headers_op = {'Authorization': f'Bearer {api_key}'} if api_key else {}
-    if api_key:
+    if api_key and not sdk_generated:
         try:
             resp = requests.post(opencode_url, json=payload, headers=headers_op, timeout=60)
             resp.raise_for_status()
@@ -130,17 +135,20 @@ def main():
             with open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w') as f:
                 f.write('# placeholder generated code due to generator failure\n')
     else:
-        with open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w') as f:
-            f.write('# placeholder generated code (no OpenCode API key provided)\n')
-        # Lightweight skeleton to help local testing when no API key is provided
-        try:
-            with open(os.path.join(generated_code_dir, 'auto_generated_code.py'), 'w') as f_py:
-                f_py.write('"""Placeholder skeleton for issue #{0} implementation."""\n\n'.format(issue_num))
-                f_py.write('def implement_issue():\n')
-                f_py.write('    """Auto-generated placeholder function."""\n')
-                f_py.write('    raise NotImplementedError("OpenCode generator unavailable; replace with real implementation.")\n')
-        except Exception:
-            pass
+        if not sdk_generated:
+            with open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w') as f:
+                f.write('# placeholder generated code (no OpenCode API key provided)\n')
+            # Lightweight skeleton to help local testing when no API key is provided
+            try:
+                with open(os.path.join(generated_code_dir, 'auto_generated_code.py'), 'w') as f_py:
+                    f_py.write('"""Placeholder skeleton for issue #{0} implementation."""\n\n'.format(issue_num))
+                    f_py.write('def implement_issue():\n')
+                    f_py.write('    """Auto-generated placeholder function."""\n')
+                    f_py.write('    raise NotImplementedError("OpenCode generator unavailable; replace with real implementation.")\n')
+            except Exception:
+                pass
+        else:
+            print("[OpenCode SDK] Code generated; skipping REST API placeholder.")
 
     # 3) Prepare git: create a new branch, commit and push
     branch_name = f"auto/issue-{issue_num}-{int(time.time())}"
