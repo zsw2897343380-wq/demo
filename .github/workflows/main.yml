@@ -19,6 +19,7 @@ on:
         type: choice
         options:
           - auto
+          - modular
           - deepseek
           - openai
           - anthropic

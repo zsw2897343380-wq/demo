@@ -42,8 +42,8 @@ def main():
     p.add_argument('--base', default='main', help='Base branch to merge into (default: main)')
     p.add_argument('--token', required=True, help='GitHub token for authentication')
     p.add_argument('--opencode-key', required=False, help='OpenCode API key (optional, legacy)')
-    p.add_argument('--strategy', required=False, choices=['auto', 'deepseek', 'openai', 'anthropic', 'opencode', 'template'], 
-                   default='auto', help='Code generation strategy (default: auto)')
+    p.add_argument('--strategy', required=False, choices=['auto', 'modular', 'deepseek', 'openai', 'anthropic', 'opencode', 'template'], 
+                   default='auto', help='Code generation strategy (default: auto). "modular" will break down requirements and generate structured code.')
     args = p.parse_args()
 
     GITHUB_API = 'https://api.github.com'
@@ -103,9 +103,16 @@ def main():
     anthropic_key = os.environ.get('ANTHROPIC_API_KEY')
     opencode_key = os.environ.get('OPENCODE_API_KEY') or args.opencode_key
     
-    # Auto-select strategy based on available keys (DeepSeek first for code generation)
+    # Auto-select strategy based on available keys and issue complexity
     if strategy == 'auto':
-        if deepseek_key:
+        # 检测是否是复杂需求（通过长度和关键词判断）
+        is_complex = len(issue_body) > 200 or \
+                     any(keyword in issue_body.lower() for keyword in ['module', 'modules', 'service', 'services', 'component', 'components', '包', '模块', '服务'])
+        
+        if deepseek_key and is_complex:
+            strategy = 'modular'
+            print(f"[Strategy] Auto-selected: MODULAR (complex requirement detected, DeepSeek API found)")
+        elif deepseek_key:
             strategy = 'deepseek'
             print(f"[Strategy] Auto-selected: DEEPSEEK API (API key found)")
         elif openai_key or anthropic_key:
@@ -120,8 +127,69 @@ def main():
     code_generated = False
     generation_method = ""
 
-    # Strategy 1: DeepSeek API (优先，对中文友好且性价比高)
-    if strategy == 'deepseek' and deepseek_key:
+    # Strategy 1: Modular Generation (需求拆解 + 多模块代码生成)
+    if strategy == 'modular' and deepseek_key:
+        print("[Modular] Using modular code generation with requirement breakdown...")
+        node_script = 'scripts/opencode_generate_modular.js'
+        if os.path.isfile(node_script):
+            try:
+                env_vars = f"DEEPSEEK_API_KEY={shlex.quote(deepseek_key)}"
+                # 尝试从 issue body 检测语言
+                language = 'auto'
+                if 'java' in issue_body.lower():
+                    language = 'java'
+                elif 'python' in issue_body.lower() or 'py' in issue_body.lower():
+                    language = 'python'
+                elif 'typescript' in issue_body.lower() or 'ts' in issue_body.lower():
+                    language = 'typescript'
+                elif 'javascript' in issue_body.lower() or 'js' in issue_body.lower():
+                    language = 'javascript'
+                elif 'go' in issue_body.lower() or 'golang' in issue_body.lower():
+                    language = 'go'
+                elif 'rust' in issue_body.lower() or 'rs' in issue_body.lower():
+                    language = 'rust'
+                
+                sdk_cmd = f"{env_vars} node {node_script} --issue-number {issue_num} --issue-body {shlex.quote(issue_body)} --outdir {shlex.quote(generated_code_dir)} --language {language}"
+                result = subprocess.run(sdk_cmd, shell=True, capture_output=True, text=True)
+                print(f"Modular generator stdout: {result.stdout}")
+                if result.stderr:
+                    print(f"Modular generator stderr: {result.stderr}")
+                
+                # 检查是否生成了多个文件
+                generated_files_check = []
+                if os.path.exists(generated_code_dir):
+                    for root, dirs, files in os.walk(generated_code_dir):
+                        for file in files:
+                            if not file.endswith('.txt') or file == 'auto_generated_code.txt':
+                                file_path = os.path.join(root, file)
+                                generated_files_check.append(file_path)
+                
+                if len(generated_files_check) > 0:
+                    # 创建汇总文件
+                    summary = f"# Issue #{issue_num} - Modular Code Generation\n\n"
+                    summary += f"Language: {language}\n"
+                    summary += f"Generated Files: {len(generated_files_check)}\n\n"
+                    summary += "## File Structure\n\n"
+                    for f in sorted(generated_files_check):
+                        rel_path = os.path.relpath(f, generated_code_dir)
+                        summary += f"- `{rel_path}`\n"
+                    
+                    summary_path = os.path.join(generated_code_dir, 'auto_generated_code.txt')
+                    with open(summary_path, 'w', encoding='utf-8') as f:
+                        f.write(summary)
+                    
+                    code_generated = True
+                    generation_method = f"Modular ({language})"
+                    print(f"[Modular] ✅ Successfully generated {len(generated_files_check)} files via modular approach.")
+                else:
+                    print("[Modular] ⚠️ No files generated, will try other strategies")
+            except Exception as e:
+                print(f"[Modular] ❌ Failed: {e}")
+        else:
+            print(f"[Modular] ⚠️ Script not found: {node_script}")
+
+    # Strategy 2: DeepSeek API (优先，对中文友好且性价比高)
+    if not code_generated and strategy == 'deepseek' and deepseek_key:
         print("[DeepSeek] Attempting to use DeepSeek API...")
         node_script = 'scripts/opencode_generate_with_deepseek.js'
         if os.path.isfile(node_script):
