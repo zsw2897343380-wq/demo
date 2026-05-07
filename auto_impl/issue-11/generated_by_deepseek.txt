@@ -1,0 +1,332 @@
+I'll create a comprehensive implementation for the e-commerce system with user management, product management, order processing, and payment functionality. I'll use Python with Flask and modern best practices.
+
+```python
+"""
+E-commerce System Implementation
+Supports: User Management, Product Management, Order Processing, Payment
+"""
+
+import os
+import uuid
+import hashlib
+import hmac
+import base64
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any
+from enum import Enum
+from dataclasses import dataclass, field
+from functools import wraps
+
+# Third-party imports
+try:
+    import jwt
+    from flask import Flask, request, jsonify, g, abort
+    from flask_sqlalchemy import SQLAlchemy
+    from werkzeug.security import generate_password_hash, check_password_hash
+    from marshmallow import Schema, fields, validate, ValidationError
+except ImportError as e:
+    print(f"Please install required packages: pip install flask flask-sqlalchemy pyjwt marshmallow")
+    raise e
+
+# Initialize Flask app
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-production')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///ecommerce.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_EXPIRATION_HOURS'] = 24
+
+db = SQLAlchemy(app)
+
+# ============================================================================
+# Enums and Constants
+# ============================================================================
+
+class UserRole(Enum):
+    """User role enumeration"""
+    NORMAL = 'normal'
+    VIP = 'vip'
+    ADMIN = 'admin'
+
+class OrderStatus(Enum):
+    """Order status enumeration"""
+    PENDING = 'pending'
+    CONFIRMED = 'confirmed'
+    PROCESSING = 'processing'
+    SHIPPED = 'shipped'
+    DELIVERED = 'delivered'
+    CANCELLED = 'cancelled'
+    REFUNDED = 'refunded'
+
+class PaymentMethod(Enum):
+    """Payment method enumeration"""
+    CREDIT_CARD = 'credit_card'
+    ALIPAY = 'alipay'
+    WECHAT = 'wechat'
+    BANK_TRANSFER = 'bank_transfer'
+
+class PaymentStatus(Enum):
+    """Payment status enumeration"""
+    PENDING = 'pending'
+    COMPLETED = 'completed'
+    FAILED = 'failed'
+    REFUNDED = 'refunded'
+
+# ============================================================================
+# Database Models
+# ============================================================================
+
+class User(db.Model):
+    """User model with role-based access control"""
+    __tablename__ = 'users'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    phone = db.Column(db.String(20), unique=True, nullable=True)
+    password_hash = db.Column(db.String(256), nullable=False)
+    role = db.Column(db.String(20), default=UserRole.NORMAL.value)
+    avatar_url = db.Column(db.String(500), nullable=True)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    addresses = db.relationship('Address', backref='user', lazy=True, cascade='all, delete-orphan')
+    orders = db.relationship('Order', backref='user', lazy=True)
+    
+    def set_password(self, password: str):
+        """Hash and set password"""
+        self.password_hash = generate_password_hash(password)
+    
+    def check_password(self, password: str) -> bool:
+        """Verify password against hash"""
+        return check_password_hash(self.password_hash, password)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert user to dictionary (excluding sensitive data)"""
+        return {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'phone': self.phone,
+            'role': self.role,
+            'avatar_url': self.avatar_url,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+class Address(db.Model):
+    """User address model"""
+    __tablename__ = 'addresses'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    street = db.Column(db.String(200), nullable=False)
+    city = db.Column(db.String(100), nullable=False)
+    state = db.Column(db.String(100), nullable=False)
+    zip_code = db.Column(db.String(20), nullable=False)
+    country = db.Column(db.String(100), default='China')
+    is_default = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'street': self.street,
+            'city': self.city,
+            'state': self.state,
+            'zip_code': self.zip_code,
+            'country': self.country,
+            'is_default': self.is_default
+        }
+
+class Product(db.Model):
+    """Product model"""
+    __tablename__ = 'products'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    price = db.Column(db.Float, nullable=False)
+    stock = db.Column(db.Integer, nullable=False, default=0)
+    category = db.Column(db.String(100), nullable=True)
+    image_url = db.Column(db.String(500), nullable=True)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    order_items = db.relationship('OrderItem', backref='product', lazy=True)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'price': self.price,
+            'stock': self.stock,
+            'category': self.category,
+            'image_url': self.image_url,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+class Order(db.Model):
+    """Order model"""
+    __tablename__ = 'orders'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    status = db.Column(db.String(20), default=OrderStatus.PENDING.value)
+    total_amount = db.Column(db.Float, nullable=False, default=0.0)
+    shipping_address_id = db.Column(db.String(36), db.ForeignKey('addresses.id'), nullable=True)
+    payment_id = db.Column(db.String(36), db.ForeignKey('payments.id'), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    items = db.relationship('OrderItem', backref='order', lazy=True, cascade='all, delete-orphan')
+    payment = db.relationship('Payment', backref='order', uselist=False)
+    shipping_address = db.relationship('Address', foreign_keys=[shipping_address_id])
+    
+    def calculate_total(self) -> float:
+        """Calculate total order amount"""
+        total = sum(item.subtotal for item in self.items)
+        self.total_amount = total
+        return total
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'status': self.status,
+            'total_amount': self.total_amount,
+            'items': [item.to_dict() for item in self.items],
+            'payment': self.payment.to_dict() if self.payment else None,
+            'shipping_address': self.shipping_address.to_dict() if self.shipping_address else None,
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+class OrderItem(db.Model):
+    """Order item model"""
+    __tablename__ = 'order_items'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_id = db.Column(db.String(36), db.ForeignKey('orders.id'), nullable=False)
+    product_id = db.Column(db.String(36), db.ForeignKey('products.id'), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+    unit_price = db.Column(db.Float, nullable=False)
+    subtotal = db.Column(db.Float, nullable=False)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'product_id': self.product_id,
+            'product_name': self.product.name if self.product else None,
+            'quantity': self.quantity,
+            'unit_price': self.unit_price,
+            'subtotal': self.subtotal
+        }
+
+class Payment(db.Model):
+    """Payment model"""
+    __tablename__ = 'payments'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_id = db.Column(db.String(36), db.ForeignKey('orders.id'), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    payment_method = db.Column(db.String(50), nullable=False)
+    status = db.Column(db.String(20), default=PaymentStatus.PENDING.value)
+    transaction_id = db.Column(db.String(200), nullable=True)
+    payment_details = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'order_id': self.order_id,
+            'amount': self.amount,
+            'payment_method': self.payment_method,
+            'status': self.status,
+            'transaction_id': self.transaction_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+# ============================================================================
+# JWT Authentication
+# ============================================================================
+
+def create_jwt_token(user_id: str, role: str) -> str:
+    """Create JWT token for user authentication"""
+    payload = {
+        'user_id': user_id,
+        'role': role,
+        'exp': datetime.utcnow() + timedelta(hours=app.config['JWT_EXPIRATION_HOURS']),
+        'iat': datetime.utcnow()
+    }
+    return jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
+
+def decode_jwt_token(token: str) -> Dict[str, Any]:
+    """Decode and verify JWT token"""
+    try:
+        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise ValueError('Token has expired')
+    except jwt.InvalidTokenError:
+        raise ValueError('Invalid token')
+
+def token_required(f):
+    """Decorator to require JWT authentication"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        
+        # Check for token in headers
+        if 'Authorization' in request.headers:
+            auth_header = request.headers['Authorization']
+            if auth_header.startswith('Bearer '):
+                token = auth_header.split(' ')[1]
+        
+        if not token:
+            return jsonify({'error': 'Authentication token is missing'}), 401
+        
+        try:
+            payload = decode_jwt_token(token)
+            current_user = User.query.get(payload['user_id'])
+            if not current_user:
+                return jsonify({'error': 'User not found'}), 401
+            g.current_user = current_user
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 401
+        
+        return f(*args, **kwargs)
+    return decorated
+
+def role_required(*roles: UserRole):
+    """Decorator to require specific user roles"""
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            if not hasattr(g, 'current_user'):
+                return jsonify({'error': 'Authentication required'}), 401
+            
+            user_role = UserRole(g.current_user.role)
+            if user_role not in roles:
+                return jsonify({'error': 'Insufficient permissions'}), 403
+            
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
+
+# ============================================================================
+# API Schemas (Request/Response Validation)
+# ============================================================================
+
+class UserRegistrationSchema(Schema):
+    """Schema for user registration"""
+    username = fields.String(required=True, validate=
