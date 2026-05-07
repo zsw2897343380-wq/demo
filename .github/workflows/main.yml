@@ -12,6 +12,18 @@ on:
         required: false
         default: 'main'
         type: string
+      strategy:
+        description: 'Code generation strategy'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - deepseek
+          - openai
+          - anthropic
+          - opencode
+          - template
   issues:
     types: [opened, edited]
   pull_request:
@@ -48,17 +60,54 @@ jobs:
       - name: Run Issue-to-Branch Automation
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # AI API Keys (optional - for AI-powered code generation)
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Legacy key (kept for compatibility)
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ISSUE_NUMBER="${{ github.event.inputs.issue_number }}"
             BASE_BRANCH="${{ github.event.inputs.base_branch || 'main' }}"
+            STRATEGY="${{ github.event.inputs.strategy || 'auto' }}"
           else
             ISSUE_NUMBER="${{ github.event.issue.number }}"
-            BASE_BRANCH="${{ github.event.inputs.base_branch || 'main' }}"
+            BASE_BRANCH="main"
+            STRATEGY="auto"
           fi
-          echo "Processing Issue #$ISSUE_NUMBER with base branch: $BASE_BRANCH"
-          python3 run_issue_to_branch.py --issue-number "$ISSUE_NUMBER" --repo "${{ github.repository }}" --base "$BASE_BRANCH" --token "$GITHUB_TOKEN" --opencode-key "$OPENCODE_API_KEY"
+          
+          echo "=========================================="
+          echo "Processing Issue #$ISSUE_NUMBER"
+          echo "Base branch: $BASE_BRANCH"
+          echo "Strategy: $STRATEGY"
+          echo "=========================================="
+          
+          # Check which API keys are available (without exposing values)
+          if [ -n "$DEEPSEEK_API_KEY" ]; then
+            echo "✅ DEEPSEEK_API_KEY is configured"
+          else
+            echo "ℹ️  DEEPSEEK_API_KEY not set"
+          fi
+          
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo "✅ OPENAI_API_KEY is configured"
+          else
+            echo "ℹ️  OPENAI_API_KEY not set"
+          fi
+          
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "✅ ANTHROPIC_API_KEY is configured"
+          else
+            echo "ℹ️  ANTHROPIC_API_KEY not set"
+          fi
+          
+          python3 run_issue_to_branch.py \
+            --issue-number "$ISSUE_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --base "$BASE_BRANCH" \
+            --token "$GITHUB_TOKEN" \
+            --strategy "$STRATEGY"
 
   review-and-merge:
     if: github.event_name == 'pull_request'

@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """
-Issue-to-Branch Automation Script
+Issue-to-Branch Automation Script with Multiple Code Generation Strategies
 
-This script performs end-to-end automation for turning an Issue into a code implementation:
-- Reads the issue body from a given issue number
-- Optionally calls an external code generator (OpenCode) to produce implementation code
-- Creates a new feature branch, commits generated code, pushes the branch, and opens a PR to the base branch
-- Comments on the issue with the PR URL for traceability
+Strategies (in order of preference):
+1. DeepSeek API (if DEEPSEEK_API_KEY available) - Great for code, cost-effective
+2. OpenAI/Anthropic API (if API key available) - Best AI quality
+3. OpenCode SDK (if installed) - Good for local OpenCode users
+4. Pure Node.js (fallback) - Always works, template-based
+
 Usage:
 - python3 issue_to_branch.py --issue-number <N> --repo owner/repo --base <branch> --token <token> [--opencode-key <key>]
+
+Environment Variables:
+- DEEPSEEK_API_KEY: For DeepSeek API code generation (recommended for Chinese users)
+- OPENAI_API_KEY: For OpenAI GPT code generation
+- ANTHROPIC_API_KEY: For Anthropic Claude code generation
+- OPENCODE_API_KEY: Legacy, kept for compatibility
 """
 import argparse
 import shlex
@@ -28,13 +35,15 @@ def run(cmd, check=False, capture_output=False):
 
 def main():
     p = argparse.ArgumentParser(description=(
-        'Issue-to-Branch Automation: reads an issue, generates implementation code, creates a branch, opens a PR.'
+        'Issue-to-Branch Automation: reads an issue, generates implementation code using AI or templates, creates a branch, opens a PR.'
     ))
     p.add_argument('--issue-number', required=True, dest='issue_number', help='Issue number to process')
     p.add_argument('--repo', required=True, help='Owner/Repo, e.g. octo-org/sample-repo')
     p.add_argument('--base', default='main', help='Base branch to merge into (default: main)')
     p.add_argument('--token', required=True, help='GitHub token for authentication')
-    p.add_argument('--opencode-key', required=False, help='OpenCode API key (optional)')
+    p.add_argument('--opencode-key', required=False, help='OpenCode API key (optional, legacy)')
+    p.add_argument('--strategy', required=False, choices=['auto', 'deepseek', 'openai', 'anthropic', 'opencode', 'template'], 
+                   default='auto', help='Code generation strategy (default: auto)')
     args = p.parse_args()
 
     GITHUB_API = 'https://api.github.com'
@@ -44,6 +53,7 @@ def main():
     }
 
     owner, repo = args.repo.split('/')
+    
     # Validate issue_number input
     if args.issue_number is None or str(args.issue_number).strip() == "":
         print("Error: --issue-number must be provided and non-empty.")
@@ -86,126 +96,177 @@ def main():
     generated_code_dir = f"auto_impl/issue-{issue_num}"
     os.makedirs(generated_code_dir, exist_ok=True)
     
-    # Track if we successfully generated code
+    # Determine which strategy to use
+    strategy = args.strategy
+    deepseek_key = os.environ.get('DEEPSEEK_API_KEY')
+    openai_key = os.environ.get('OPENAI_API_KEY')
+    anthropic_key = os.environ.get('ANTHROPIC_API_KEY')
+    opencode_key = os.environ.get('OPENCODE_API_KEY') or args.opencode_key
+    
+    # Auto-select strategy based on available keys (DeepSeek first for code generation)
+    if strategy == 'auto':
+        if deepseek_key:
+            strategy = 'deepseek'
+            print(f"[Strategy] Auto-selected: DEEPSEEK API (API key found)")
+        elif openai_key or anthropic_key:
+            strategy = 'openai' if openai_key else 'anthropic'
+            print(f"[Strategy] Auto-selected: {strategy.upper()} API (API key found)")
+        else:
+            strategy = 'template'
+            print("[Strategy] Auto-selected: TEMPLATE (no API keys found)")
+    else:
+        print(f"[Strategy] User selected: {strategy.upper()}")
+
     code_generated = False
-    
-    # Try to use the Node.js code generator first
-    node_script_paths = [
-        'scripts/opencode_generate.js',
-        'opencode_generate.js',
-    ]
-    
-    for node_script in node_script_paths:
+    generation_method = ""
+
+    # Strategy 1: DeepSeek API (优先，对中文友好且性价比高)
+    if strategy == 'deepseek' and deepseek_key:
+        print("[DeepSeek] Attempting to use DeepSeek API...")
+        node_script = 'scripts/opencode_generate_with_deepseek.js'
         if os.path.isfile(node_script):
-            print(f"[Code Generator] Found Node.js script: {node_script}")
+            try:
+                env_vars = f"DEEPSEEK_API_KEY={shlex.quote(deepseek_key)}"
+                sdk_cmd = f"{env_vars} node {node_script} --issue-number {issue_num} --issue-body {shlex.quote(issue_body)} --outdir {shlex.quote(generated_code_dir)} --model coder"
+                result = subprocess.run(sdk_cmd, shell=True, capture_output=True, text=True)
+                print(f"DeepSeek stdout: {result.stdout}")
+                if result.stderr:
+                    print(f"DeepSeek stderr: {result.stderr}")
+                
+                # Check for output file
+                candidate = os.path.join(generated_code_dir, 'generated_by_deepseek.txt')
+                if os.path.exists(candidate):
+                    with open(candidate, 'r', encoding='utf-8') as f_in:
+                        content = f_in.read()
+                    if content and len(content) > 50 and not content.startswith('# DeepSeek generation failed'):
+                        with open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w', encoding='utf-8') as f_out:
+                            f_out.write(content)
+                        code_generated = True
+                        generation_method = "DeepSeek API (deepseek-coder)"
+                        print("[DeepSeek] ✅ Successfully generated code via DeepSeek API.")
+            except Exception as e:
+                print(f"[DeepSeek] ❌ Failed: {e}")
+        else:
+            print(f"[DeepSeek] ⚠️ Script not found: {node_script}")
+
+    # Strategy 2: OpenAI/Anthropic API
+    if not code_generated and strategy in ['openai', 'anthropic'] and (openai_key or anthropic_key):
+        print(f"[AI Generation] Attempting to use {strategy.upper()} API...")
+        node_script = 'scripts/opencode_generate_with_ai_api.js'
+        if os.path.isfile(node_script):
+            try:
+                env_vars = f"OPENAI_API_KEY={shlex.quote(openai_key or '')} ANTHROPIC_API_KEY={shlex.quote(anthropic_key or '')}"
+                sdk_cmd = f"{env_vars} node {node_script} --issue-number {issue_num} --issue-body {shlex.quote(issue_body)} --outdir {shlex.quote(generated_code_dir)}"
+                result = subprocess.run(sdk_cmd, shell=True, capture_output=True, text=True)
+                print(f"AI API stdout: {result.stdout}")
+                if result.stderr:
+                    print(f"AI API stderr: {result.stderr}")
+                
+                # Check for output file
+                candidate = os.path.join(generated_code_dir, 'generated_by_ai.txt')
+                if os.path.exists(candidate):
+                    with open(candidate, 'r', encoding='utf-8') as f_in:
+                        content = f_in.read()
+                    if content and len(content) > 50 and not content.startswith('# AI generation failed'):
+                        with open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w', encoding='utf-8') as f_out:
+                            f_out.write(content)
+                        code_generated = True
+                        generation_method = f"{strategy.upper()} API"
+                        print(f"[AI Generation] Successfully generated code via {strategy.upper()} API.")
+            except Exception as e:
+                print(f"[AI Generation] {strategy.upper()} API failed: {e}")
+        else:
+            print(f"[AI Generation] Script not found: {node_script}")
+
+    # Strategy 2: OpenCode SDK (if selected or as fallback)
+    if not code_generated and strategy == 'opencode':
+        print("[OpenCode SDK] Attempting to use OpenCode SDK...")
+        node_script = 'scripts/opencode_generate_with_sdk.js'
+        if os.path.isfile(node_script):
             try:
                 sdk_cmd = f"node {node_script} --issue-number {issue_num} --issue-body {shlex.quote(issue_body)} --outdir {shlex.quote(generated_code_dir)}"
                 result = subprocess.run(sdk_cmd, shell=True, capture_output=True, text=True)
-                print(f"Node.js generator output: {result.stdout}")
+                print(f"OpenCode SDK stdout: {result.stdout}")
                 if result.stderr:
-                    print(f"Node.js generator stderr: {result.stderr}")
+                    print(f"OpenCode SDK stderr: {result.stderr}")
                 
-                # Check if the output file was created
                 candidate = os.path.join(generated_code_dir, 'generated_by_sdk.txt')
                 if os.path.exists(candidate):
-                    with open(candidate, 'r') as f_in, open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w') as f_out:
-                        f_out.write(f_in.read())
-                    code_generated = True
-                    print("[Code Generator] Successfully generated code via Node.js script.")
-                    break
+                    with open(candidate, 'r', encoding='utf-8') as f_in:
+                        content = f_in.read()
+                    if content and len(content) > 50 and not content.startswith('# OpenCode SDK generation failed'):
+                        with open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w', encoding='utf-8') as f_out:
+                            f_out.write(content)
+                        code_generated = True
+                        generation_method = "OpenCode SDK"
+                        print("[OpenCode SDK] Successfully generated code via SDK.")
             except Exception as e:
-                print(f"[Code Generator] Node.js script failed: {e}")
-                continue
-    
-    # If Node.js generator didn't work, generate code directly in Python
+                print(f"[OpenCode SDK] Failed: {e}")
+        else:
+            print(f"[OpenCode SDK] Script not found: {node_script}")
+
+    # Strategy 3: Template-based (fallback)
     if not code_generated:
-        print("[Code Generator] Using Python fallback for code generation.")
-        try:
-            # Generate code based on issue content
-            code_content = f"""# Auto-generated implementation for Issue #{issue_num}
+        print("[Template] Using Node.js template generator as fallback...")
+        node_script = 'scripts/opencode_generate.js'
+        if os.path.isfile(node_script):
+            try:
+                sdk_cmd = f"node {node_script} --issue-number {issue_num} --issue-body {shlex.quote(issue_body)} --outdir {shlex.quote(generated_code_dir)}"
+                result = subprocess.run(sdk_cmd, shell=True, capture_output=True, text=True)
+                print(f"Template generator stdout: {result.stdout}")
+                if result.stderr:
+                    print(f"Template generator stderr: {result.stderr}")
+                
+                candidate = os.path.join(generated_code_dir, 'generated_by_sdk.txt')
+                if os.path.exists(candidate):
+                    with open(candidate, 'r', encoding='utf-8') as f_in:
+                        content = f_in.read()
+                    with open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w', encoding='utf-8') as f_out:
+                        f_out.write(content)
+                    code_generated = True
+                    generation_method = "Template (Node.js)"
+                    print("[Template] Successfully generated code via template.")
+            except Exception as e:
+                print(f"[Template] Node.js template failed: {e}")
+        
+        # Ultimate fallback: Python template generator
+        if not code_generated:
+            print("[Template] Using Python fallback generator...")
+            try:
+                code_content = f"""# Auto-generated implementation for Issue #{issue_num}
 # Title: {issue_title}
+# Generation Method: Python Template Fallback
 # Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}
 
+# Issue Requirements:
 """
-            # Add the issue body as comments
-            code_content += f"""# Issue Requirements:
-"""
-            for line in issue_body.split('\n'):
-                code_content += f"# {line}\n"
-            
-            code_content += f"""
+                for line in issue_body.split('\n'):
+                    code_content += f"# {line}\n"
+                
+                code_content += f"""
 # Placeholder implementation
 def implement_issue_{issue_num}():
     \"\"\"Implementation for issue #{issue_num}: {issue_title}\"\"\"
     # TODO: Implement the feature based on the above requirements
     raise NotImplementedError("Please implement based on issue requirements")
+
+# Example usage:
+if __name__ == "__main__":
+    try:
+        result = implement_issue_{issue_num}()
+        print(f"Result: {{result}}")
+    except NotImplementedError as e:
+        print(f"Not implemented yet: {{e}}")
 """
-            
-            output_file = os.path.join(generated_code_dir, 'auto_generated_code.txt')
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(code_content)
-            code_generated = True
-            print(f"[Code Generator] Generated placeholder code: {output_file}")
-        except Exception as e:
-            print(f"[Code Generator] Python fallback failed: {e}")
-    
-    # Try OpenCode API if key is provided
-    api_key = os.environ.get('OPENCODE_API_KEY') or args.opencode_key
-    if api_key and not code_generated:
-        print("[Code Generator] Attempting to use OpenCode API...")
-        # Use a configurable API URL or default to None (disabled by default)
-        opencode_url = os.environ.get('OPENCODE_API_URL', '')
-        if opencode_url and opencode_url != 'https://api.opencode.example/generate':
-            try:
-                payload = {
-                    'repository': f"{owner}/{repo}",
-                    'issue_number': issue_num,
-                    'requirements': issue_body,
-                }
-                headers_op = {'Authorization': f'Bearer {api_key}'}
-                resp = requests.post(opencode_url, json=payload, headers=headers_op, timeout=60)
-                resp.raise_for_status()
-                content_type = resp.headers.get('Content-Type', '')
-                if content_type.startswith('application/zip') or content_type.startswith('application/octet-stream'):
-                    with open(os.path.join(generated_code_dir, 'auto_generated_code.zip'), 'wb') as f:
-                        f.write(resp.content)
-                elif content_type.startswith('application/json'):
-                    data = resp.json()
-                    if isinstance(data, dict) and 'code' in data:
-                        with open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'w') as f:
-                            f.write(data['code'] or '')
-                    else:
-                        with open(os.path.join(generated_code_dir, 'auto_generated_code.json'), 'w') as f:
-                            json.dump(data, f, indent=2)
-                else:
-                    with open(os.path.join(generated_code_dir, 'auto_generated_code.txt'), 'wb') as f:
-                        f.write(resp.content)
+                
+                output_file = os.path.join(generated_code_dir, 'auto_generated_code.txt')
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    f.write(code_content)
                 code_generated = True
-                print("[Code Generator] Successfully generated code via OpenCode API.")
+                generation_method = "Template (Python)"
+                print(f"[Template] Generated placeholder code: {output_file}")
             except Exception as e:
-                print(f"[Code Generator] OpenCode API failed: {e}")
-        else:
-            print("[Code Generator] OpenCode API URL not configured or using placeholder. Skipping API call.")
-
-    # Ensure we have at least a placeholder file
-    placeholder_file = os.path.join(generated_code_dir, 'auto_generated_code.txt')
-    if not os.path.exists(placeholder_file):
-        print("[Code Generator] Creating fallback placeholder file.")
-        with open(placeholder_file, 'w', encoding='utf-8') as f:
-            f.write(f"""# Placeholder generated code for Issue #{issue_num}
-# Title: {issue_title}
-# 
-# No external code generator was available.
-# Please implement based on the issue requirements.
-
-# Issue body:
-""")
-            for line in issue_body.split('\n'):
-                f.write(f"# {line}\n")
-            f.write(f"""
-def placeholder_implementation():
-    raise NotImplementedError("Implement based on issue #{issue_num} requirements")
-""")
+                print(f"[Template] Python fallback failed: {e}")
 
     # Verify files exist before committing
     generated_files = []
@@ -255,7 +316,7 @@ def placeholder_implementation():
         print(f"Git status after force add: {status_output}")
     
     # Commit with explicit file list if needed
-    commit_message = f'auto-impl: issue #{issue_num} - generate implementation'
+    commit_message = f'auto-impl: issue #{issue_num} - generate implementation [{generation_method or "fallback"}]'
     if status_output:
         commit_result = run(f'git commit -m "{commit_message}"', check=False, capture_output=True)
         print(f"Git commit result: {commit_result}")
@@ -274,6 +335,8 @@ def placeholder_implementation():
 
 **Issue Title:** {issue_title}
 
+**Generation Method:** {generation_method or "Fallback Template"}
+
 **Generated Files:**
 """
     for f in generated_files:
@@ -281,6 +344,9 @@ def placeholder_implementation():
     
     pr_body += f"""
 **Note:** This is an automated implementation. Please review and modify as needed before merging.
+
+---
+*Generated by GitHub Actions* ⭐
 """
 
     pr_url = f"{GITHUB_API}/repos/{owner}/{repo}/pulls"
@@ -295,10 +361,10 @@ def placeholder_implementation():
         pr = r.json()
         pr_number = pr.get('number')
         pr_html_url = pr.get('html_url')
-        print(f"Created PR #{pr_number}: {pr_html_url}")
+        print(f"✅ Created PR #{pr_number}: {pr_html_url}")
         # Comment on the issue with the PR URL for traceability
         issues_comment_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{issue_num}/comments"
-        comment_payload = {'body': f"Automated PR created: {pr_html_url}"}
+        comment_payload = {'body': f"🤖 Automated PR created: {pr_html_url}\n\nGeneration method: {generation_method or 'Template'}"}
         requests.post(issues_comment_url, headers=headers, json=comment_payload)
         # Persist PR URL for downstream steps if needed
         print(f"PR URL: {pr_html_url}")
