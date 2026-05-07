@@ -20,7 +20,7 @@ git push origin main
 
 ---
 
-## 🎯 三种使用模式
+## 🎯 四种使用模式
 
 ### 模式 1：基础模式（推荐新手）
 
@@ -34,15 +34,36 @@ git push origin main
 
 ---
 
-### 模式 2：AI 模式（推荐）
+### 模式 2：DeepSeek AI 模式（🇨🇳 中国用户强烈推荐！）
+
+**配置**：
+```
+GitHub Secrets:
+  DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxx
+```
+
+**效果**：使用 DeepSeek 智能生成代码
+- ✅ 中文理解能力最强
+- ✅ 成本最低（约 ¥1-2/M tokens）
+- ✅ 国内访问稳定
+
+**获取 API Key**：https://platform.deepseek.com/
+
+**详细文档**：[DEEPSEEK_GUIDE.md](./DEEPSEEK_GUIDE.md)
+
+---
+
+### 模式 3：OpenAI/Anthropic AI 模式
 
 **配置**：
 ```
 GitHub Secrets:
   OPENAI_API_KEY=sk-xxxxxxxxxxxxx
+  # 或
+  ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxx
 ```
 
-**效果**：使用 GPT-3.5/4 智能生成代码
+**效果**：使用 GPT/Claude 智能生成代码
 
 **触发方式**：
 - 创建 issue 自动使用 AI
@@ -50,7 +71,7 @@ GitHub Secrets:
 
 ---
 
-### 模式 3：精确控制
+### 模式 4：精确控制
 
 **触发方式**：Actions → Harness → Run workflow
 
@@ -59,6 +80,7 @@ GitHub Secrets:
 - Base branch: `main` (或 `develop`)
 - Strategy: 
   - `auto` - 自动选择（推荐）
+  - `deepseek` - 强制 DeepSeek
   - `openai` - 强制 OpenAI
   - `anthropic` - 强制 Claude
   - `template` - 强制模板

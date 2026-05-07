@@ -21,14 +21,15 @@ No commits between main and auto/issue-1-1778141559
 
 ### 1. 多重代码生成策略
 
-现在支持 **4 种生成策略**，按优先级自动选择：
+现在支持 **5 种生成策略**，按优先级自动选择：
 
-| 优先级 | 策略 | 需求 | 质量 | 稳定性 |
-|--------|------|------|------|--------|
-| 1 | OpenAI API | `OPENAI_API_KEY` | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-| 2 | Anthropic API | `ANTHROPIC_API_KEY` | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-| 3 | OpenCode SDK | 安装 `@opencode-ai/sdk` | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-| 4 | Node.js Template | 无 | ⭐⭐ | ⭐⭐⭐⭐⭐ |
+| 优先级 | 策略 | 需求 | 质量 | 稳定性 | 推荐度 |
+|--------|------|------|------|--------|--------|
+| 1 | **DeepSeek API** 🇨🇳 | `DEEPSEEK_API_KEY` | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| 2 | OpenAI API | `OPENAI_API_KEY` | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| 3 | Anthropic API | `ANTHROPIC_API_KEY` | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| 4 | OpenCode SDK | 安装 `@opencode-ai/sdk` | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ |
+| 5 | Node.js Template | 无 | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
 
 ### 2. 修改的文件
 
@@ -37,8 +38,9 @@ No commits between main and auto/issue-1-1778141559
 | 文件 | 用途 | 说明 |
 |------|------|------|
 | `scripts/opencode_generate.js` | 模板生成（默认） | 纯 Node.js，无依赖 |
-| `scripts/opencode_generate_with_sdk.js` | OpenCode SDK 版本 | 需要安装 npm 包 |
+| `scripts/opencode_generate_with_deepseek.js` | DeepSeek API | 中国用户首选 🇨🇳 |
 | `scripts/opencode_generate_with_ai_api.js` | OpenAI/Anthropic API | 直接调用 HTTP API |
+| `scripts/opencode_generate_with_sdk.js` | OpenCode SDK 版本 | 需要安装 npm 包 |
 | `opencode_generate.js` | 根目录备份 | 同 scripts 版本 |
 
 #### Python 自动化脚本
@@ -59,8 +61,10 @@ No commits between main and auto/issue-1-1778141559
 
 | 文件 | 内容 |
 |------|------|
+| `QUICKSTART.md` | 5分钟快速上手指南 |
+| `DEEPSEEK_GUIDE.md` | DeepSeek API 详细配置指南 🇨🇳 |
+| `CONFIGURATION.md` | 完整配置指南（所有策略） |
 | `SDK_COMPATIBILITY.md` | OpenCode SDK 兼容性分析 |
-| `CONFIGURATION.md` | 完整配置指南 |
 | `FIXES.md` | 原始问题修复说明 |
 | `SUMMARY.md` | 本文件，修改总结 |
 
@@ -73,7 +77,9 @@ No commits between main and auto/issue-1-1778141559
 ```python
 # 伪代码展示逻辑
 def generate_code():
-    if OPENAI_API_KEY available:
+    if DEEPSEEK_API_KEY available:
+        return generate_with_deepseek()  # 中国用户首选 🇨🇳
+    elif OPENAI_API_KEY available:
         return generate_with_openai()  # 高质量 AI
     elif ANTHROPIC_API_KEY available:
         return generate_with_anthropic()  # 备选 AI

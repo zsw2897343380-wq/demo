@@ -19,11 +19,48 @@
 
 ## 🧠 AI 增强配置（推荐）
 
-### 方案 A：OpenAI GPT（推荐）
+### 方案 A：DeepSeek（强烈推荐 🇨🇳）
+
+**特点**：
+- 🤖 使用 deepseek-coder 模型生成代码
+- 🇨🇳 **中文理解能力最强** - 完美理解中文 issue
+- 💰 **成本最低** - 约 ¥1-2/M tokens
+- ⚡ **国内访问稳定** - 无需翻墙
+- 📝 代码质量优秀
+
+**适用人群**：
+- 中国用户（强烈推荐！）
+- 主要使用中文描述 issue
+- 追求性价比
+
+**配置步骤**：
+
+1. **获取 DeepSeek API Key**
+   - 访问 https://platform.deepseek.com/
+   - 注册并完成实名认证
+   - 创建 API Key
+   - 复制 Key 值
+
+2. **添加到 GitHub Secrets**
+   ```
+   Settings → Secrets and variables → Actions → New repository secret
+   Name: DEEPSEEK_API_KEY
+   Value: sk-xxxxxxxxxxxxxxxxx
+   ```
+
+3. **测试**
+   - 创建一个新 issue
+   - 工作流会自动使用 DeepSeek 生成代码
+
+**详细文档**：[DeepSeek 配置指南](./DEEPSEEK_GUIDE.md)
+
+---
+
+### 方案 B：OpenAI GPT
 
 **特点**：
 - 🤖 使用 GPT-3.5/4 生成代码
-- 💰 成本较低（GPT-3.5 每 1K tokens 约 $0.002）
+- 💰 成本适中（GPT-3.5 每 1K tokens 约 $0.002）
 - ⚡ 响应快速
 - 📝 代码质量高
 
@@ -47,11 +84,11 @@
 
 ---
 
-### 方案 B：Anthropic Claude
+### 方案 C：Anthropic Claude
 
 **特点**：
 - 🤖 使用 Claude 3 生成代码
-- 🧠 代码理解能力更强
+- 🧠 代码理解能力最强
 - 💰 成本适中
 - 📚 擅长处理复杂需求
 
@@ -75,29 +112,38 @@
 
 ---
 
-### 方案 C：同时使用多个 API
+### 方案 D：同时使用多个 API
 
 如果你有多个 API Keys，系统会按以下优先级选择：
 
-1. **OpenAI**（如果有 OPENAI_API_KEY）
-2. **Anthropic**（如果有 ANTHROPIC_API_KEY）
-3. **Template**（如果没有 API Keys）
+1. **DeepSeek**（如果有 DEEPSEEK_API_KEY）🇨🇳 优先
+2. **OpenAI**（如果有 OPENAI_API_KEY）
+3. **Anthropic**（如果有 ANTHROPIC_API_KEY）
+4. **Template**（如果没有 API Keys）
 
-**建议配置**：
+**建议配置**（中国用户）：
 ```yaml
 # GitHub Secrets 配置
-OPENAI_API_KEY: sk-xxx...    # 主要使用
-ANTHROPIC_API_KEY: sk-ant... # 备选
+DEEPSEEK_API_KEY: sk-xxx...     # 主要使用（推荐）
+OPENAI_API_KEY: sk-xxx...       # 备选
+```
+
+**建议配置**（海外用户）：
+```yaml
+# GitHub Secrets 配置
+OPENAI_API_KEY: sk-xxx...       # 主要使用
+ANTHROPIC_API_KEY: sk-ant...    # 备选
 ```
 
 ---
 
 ## 📊 生成策略对比
 
-| 策略 | 质量 | 速度 | 成本 | 稳定性 | 适用场景 |
-|------|------|------|------|--------|----------|
-| **OpenAI** ⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 💰 低 | ⭐⭐⭐⭐ | 日常开发 |
-| **Anthropic** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | 💰 中 | ⭐⭐⭐⭐ | 复杂需求 |
+| 策略 | 质量 | 速度 | 成本 | 稳定性 | 中文支持 | 适用场景 |
+|------|------|------|------|--------|----------|----------|
+| **DeepSeek** 🇨🇳 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 💰 最低 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 国内用户首选 |
+| **OpenAI** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 💰 低 | ⭐⭐⭐⭐ | ⭐⭐⭐ | 海外用户 |
+| **Anthropic** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | 💰 中 | ⭐⭐⭐⭐ | ⭐⭐⭐ | 复杂需求 |
 | **Template** | ⭐⭐ | ⭐⭐⭐⭐⭐ | 免费 | ⭐⭐⭐⭐⭐ | CI/CD、基础框架 |
 | **OpenCode SDK** | ⭐⭐⭐⭐⭐ | ⭐⭐ | 免费* | ⭐⭐⭐ | 本地开发 |
 
