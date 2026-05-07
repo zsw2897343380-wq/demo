@@ -13,14 +13,13 @@ on:
         default: 'main'
         type: string
       strategy:
-        description: 'Code generation strategy'
+        description: 'Code generation strategy (auto uses modular for DeepSeek)'
         required: false
         default: 'auto'
         type: choice
         options:
           - auto
           - modular
-          - deepseek
           - openai
           - anthropic
           - opencode

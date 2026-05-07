@@ -103,21 +103,16 @@ def main():
     anthropic_key = os.environ.get('ANTHROPIC_API_KEY')
     opencode_key = os.environ.get('OPENCODE_API_KEY') or args.opencode_key
     
-    # Auto-select strategy based on available keys and issue complexity
+    # Auto-select strategy based on available keys
+    # 优先级：Modular > DeepSeek > OpenAI > Anthropic > Template
     if strategy == 'auto':
-        # 检测是否是复杂需求（通过长度和关键词判断）
-        is_complex = len(issue_body) > 200 or \
-                     any(keyword in issue_body.lower() for keyword in ['module', 'modules', 'service', 'services', 'component', 'components', '包', '模块', '服务'])
-        
-        if deepseek_key and is_complex:
+        # 只要有 DeepSeek API Key，优先使用模块化生成（生成包结构）
+        if deepseek_key:
             strategy = 'modular'
-            print(f"[Strategy] Auto-selected: MODULAR (complex requirement detected, DeepSeek API found)")
-        elif deepseek_key:
-            strategy = 'deepseek'
-            print(f"[Strategy] Auto-selected: DEEPSEEK API (API key found)")
+            print(f"[Strategy] Auto-selected: MODULAR (generating package structure with DeepSeek)")
         elif openai_key or anthropic_key:
             strategy = 'openai' if openai_key else 'anthropic'
-            print(f"[Strategy] Auto-selected: {strategy.upper()} API (API key found)")
+            print(f"[Strategy] Auto-selected: {strategy.upper()} API (single file generation)")
         else:
             strategy = 'template'
             print("[Strategy] Auto-selected: TEMPLATE (no API keys found)")
@@ -155,34 +150,36 @@ def main():
                 if result.stderr:
                     print(f"Modular generator stderr: {result.stderr}")
                 
-                # 检查是否生成了多个文件
+                # 检查是否生成了多个代码文件（不包括文档）
                 generated_files_check = []
+                code_extensions = ['.java', '.py', '.ts', '.js', '.go', '.rs', '.c', '.cpp', '.h']
+                
                 if os.path.exists(generated_code_dir):
                     for root, dirs, files in os.walk(generated_code_dir):
                         for file in files:
-                            if not file.endswith('.txt') or file == 'auto_generated_code.txt':
+                            # 只统计代码文件，排除文档和汇总文件
+                            if any(file.endswith(ext) for ext in code_extensions):
                                 file_path = os.path.join(root, file)
                                 generated_files_check.append(file_path)
                 
                 if len(generated_files_check) > 0:
-                    # 创建汇总文件
-                    summary = f"# Issue #{issue_num} - Modular Code Generation\n\n"
-                    summary += f"Language: {language}\n"
-                    summary += f"Generated Files: {len(generated_files_check)}\n\n"
-                    summary += "## File Structure\n\n"
-                    for f in sorted(generated_files_check):
-                        rel_path = os.path.relpath(f, generated_code_dir)
-                        summary += f"- `{rel_path}`\n"
-                    
-                    summary_path = os.path.join(generated_code_dir, 'auto_generated_code.txt')
-                    with open(summary_path, 'w', encoding='utf-8') as f:
-                        f.write(summary)
+                    # 检测实际使用的语言（从文件扩展名）
+                    detected_lang = language
+                    if generated_files_check:
+                        first_file = generated_files_check[0]
+                        if first_file.endswith('.java'): detected_lang = 'java'
+                        elif first_file.endswith('.py'): detected_lang = 'python'
+                        elif first_file.endswith('.ts'): detected_lang = 'typescript'
+                        elif first_file.endswith('.js'): detected_lang = 'javascript'
+                        elif first_file.endswith('.go'): detected_lang = 'go'
+                        elif first_file.endswith('.rs'): detected_lang = 'rust'
                     
                     code_generated = True
-                    generation_method = f"Modular ({language})"
-                    print(f"[Modular] ✅ Successfully generated {len(generated_files_check)} files via modular approach.")
+                    generation_method = f"Modular ({detected_lang})"
+                    print(f"[Modular] ✅ Successfully generated {len(generated_files_check)} code files")
+                    print(f"[Modular] 📁 Language detected: {detected_lang}")
                 else:
-                    print("[Modular] ⚠️ No files generated, will try other strategies")
+                    print("[Modular] ⚠️ No code files generated, will try other strategies")
             except Exception as e:
                 print(f"[Modular] ❌ Failed: {e}")
         else:
