@@ -112,14 +112,45 @@
 
 ---
 
-### 方案 D：同时使用多个 API
+### 方案 D：模块化生成（复杂需求推荐）
+
+**特点**：
+- 🏗️ **自动拆解需求** - 将大需求拆分为多个模块
+- 📁 **生成包结构** - 类似 Java 包结构的整洁目录
+- 🧩 **多文件生成** - 每个模块独立文件
+- 📝 **完整架构** - 包含 Controller、Service、Repository 等
+
+**适用场景**：
+- 包含多个功能点的复杂需求
+- 需要清晰架构设计的项目
+- Java/Python/Go 等需要包结构的语言
+
+**使用方式**：
+```bash
+# 手动指定策略
+--strategy modular
+
+# 或让系统自动检测（复杂需求自动选择）
+--strategy auto
+```
+
+**详细文档**：[模块化生成指南](./MODULAR_GUIDE.md)
+
+---
+
+### 方案 E：同时使用多个 API
 
 如果你有多个 API Keys，系统会按以下优先级选择：
 
-1. **DeepSeek**（如果有 DEEPSEEK_API_KEY）🇨🇳 优先
-2. **OpenAI**（如果有 OPENAI_API_KEY）
-3. **Anthropic**（如果有 ANTHROPIC_API_KEY）
-4. **Template**（如果没有 API Keys）
+1. **Modular**（复杂需求 + DeepSeek API）🏗️
+2. **DeepSeek**（如果有 DEEPSEEK_API_KEY）🇨🇳 
+3. **OpenAI**（如果有 OPENAI_API_KEY）
+4. **Anthropic**（如果有 ANTHROPIC_API_KEY）
+5. **Template**（如果没有 API Keys）
+
+**自动选择逻辑**：
+- 如果需求包含多个模块/服务（长度>200字符或含关键词），优先使用 Modular
+- 否则优先使用 DeepSeek（成本最低）
 
 **建议配置**（中国用户）：
 ```yaml
@@ -141,9 +172,11 @@ ANTHROPIC_API_KEY: sk-ant...    # 备选
 
 | 策略 | 质量 | 速度 | 成本 | 稳定性 | 中文支持 | 适用场景 |
 |------|------|------|------|--------|----------|----------|
+| **Modular** 🏗️ | ⭐⭐⭐⭐⭐ | ⭐⭐ | 💰 中 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 复杂需求、架构设计 |
 | **DeepSeek** 🇨🇳 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 💰 最低 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 国内用户首选 |
 | **OpenAI** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 💰 低 | ⭐⭐⭐⭐ | ⭐⭐⭐ | 海外用户 |
 | **Anthropic** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | 💰 中 | ⭐⭐⭐⭐ | ⭐⭐⭐ | 复杂需求 |
+| **Template** | ⭐⭐ | ⭐⭐⭐⭐⭐ | 免费 | ⭐⭐⭐⭐⭐ | N/A | 简单需求、无API |
 | **Template** | ⭐⭐ | ⭐⭐⭐⭐⭐ | 免费 | ⭐⭐⭐⭐⭐ | CI/CD、基础框架 |
 | **OpenCode SDK** | ⭐⭐⭐⭐⭐ | ⭐⭐ | 免费* | ⭐⭐⭐ | 本地开发 |
 
