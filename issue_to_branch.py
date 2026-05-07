@@ -24,6 +24,8 @@ def main():
     p.add_argument('--repo', required=True, help='Owner/Repo')
     p.add_argument('--base', default='main', help='Base branch')
     p.add_argument('--token', required=True, help='GitHub token')
+    p.add_argument('--strategy', required=False, default='auto', help='Generation strategy (kept for compatibility, always uses modular)')
+    p.add_argument('--opencode-key', required=False, help='Legacy parameter (not used)')
     args = p.parse_args()
 
     GITHUB_API = 'https://api.github.com'
