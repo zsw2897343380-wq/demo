@@ -70,8 +70,53 @@ def main():
     generation_method = ""
     generated_files = []
     
-    if deepseek_key:
-        # Force modular generation
+    # Detect if this is a context-aware request (refactoring based on existing code)
+    context_keywords = ['优化', '重构', '修改', '添加', '更新', '改进', '基于', '现有', '已有', 
+                        'optimize', 'refactor', 'modify', 'update', 'improve', 'existing', 'current', 'based on']
+    is_context_mode = any(kw in issue_body.lower() for kw in context_keywords)
+    
+    if deepseek_key and is_context_mode:
+        # Context-aware generation based on existing code
+        print("\n[Strategy] Using CONTEXTUAL code generation (based on existing codebase)")
+        node_script = 'scripts/opencode_generate_contextual.js'
+        
+        if os.path.isfile(node_script):
+            try:
+                env_vars = f"DEEPSEEK_API_KEY={shlex.quote(deepseek_key)}"
+                sdk_cmd = f"{env_vars} node {node_script} --issue-number {issue_num} --issue-body {shlex.quote(issue_body)} --repo {shlex.quote(args.repo)} --token {shlex.quote(args.token)} --base {args.base} --outdir {shlex.quote(generated_code_dir)}"
+                
+                print("\n🧠 Analyzing existing code and generating contextual changes...")
+                result = subprocess.run(sdk_cmd, shell=True, capture_output=True, text=True)
+                print(result.stdout)
+                if result.stderr:
+                    print(result.stderr)
+                
+                # Check for generated files
+                code_extensions = ['.java', '.py', '.ts', '.js', '.go', '.rs']
+                
+                if os.path.exists(generated_code_dir):
+                    for root, dirs, files in os.walk(generated_code_dir):
+                        for file in files:
+                            if any(file.endswith(ext) for ext in code_extensions):
+                                file_path = os.path.join(root, file)
+                                generated_files.append(file_path)
+                                rel_path = os.path.relpath(file_path, generated_code_dir)
+                                print(f"  ✅ {rel_path}")
+                
+                if len(generated_files) > 0:
+                    code_generated = True
+                    generation_method = "Contextual (Based on existing code)"
+                    print(f"\n✅ Successfully generated {len(generated_files)} contextual changes")
+                else:
+                    print("\n⚠️  No code files generated, falling back to modular mode")
+                    
+            except Exception as e:
+                print(f"\n⚠️  Contextual generation failed: {e}, falling back to modular")
+        else:
+            print(f"\n⚠️  Contextual generator not found, using modular mode")
+    
+    if not code_generated and deepseek_key:
+        # Modular generation (from scratch)
         print("\n[Strategy] Using MODULAR code generation (multi-file package structure)")
         node_script = 'scripts/opencode_generate_modular.js'
         
