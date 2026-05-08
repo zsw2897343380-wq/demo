@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 智能模块化代码生成 - AI决定文件结构版
-// AI根据需求分析决定：1. 需要哪些模块 2. 每个模块需要哪些文件 3. 文件命名
+// 智能模块化代码生成 - 按语言标准架构版
+// Java = 三层架构, Python = 标准包结构, TypeScript = 模块化架构
 // Usage:
 // DEEPSEEK_API_KEY=xxx node scripts/opencode_generate_modular.js --issue-number 42 --issue-body "<text>" --outdir ./auto_impl/issue-42
 
@@ -8,22 +8,185 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-// 语言配置
-const LANGUAGE_CONFIG = {
+// 语言架构标准配置
+const LANGUAGE_ARCHITECTURE = {
   java: {
     ext: '.java',
     srcDir: 'src/main/java',
-    defaultPackage: 'com.example'
+    defaultPackage: 'com.example',
+    description: 'Spring Boot 三层架构',
+    layers: [
+      {
+        name: 'controller',
+        suffix: 'Controller',
+        description: '控制层 - REST API 入口，处理 HTTP 请求响应',
+        annotations: ['@RestController', '@RequestMapping'],
+        imports: ['org.springframework.web.bind.annotation.*', 'org.springframework.beans.factory.annotation.Autowired']
+      },
+      {
+        name: 'service',
+        suffix: 'Service',
+        description: '业务层 - 业务逻辑处理，事务管理',
+        annotations: ['@Service', '@Transactional'],
+        imports: ['org.springframework.stereotype.Service', 'org.springframework.transaction.annotation.Transactional']
+      },
+      {
+        name: 'repository',
+        suffix: 'Repository',
+        description: '数据层 - 数据库访问，JPA 操作',
+        annotations: ['@Repository'],
+        imports: ['org.springframework.stereotype.Repository', 'org.springframework.data.jpa.repository.JpaRepository']
+      },
+      {
+        name: 'entity',
+        suffix: '',  // Entity 直接使用名称，如 User
+        description: '实体层 - 数据模型，对应数据库表',
+        annotations: ['@Entity', '@Table'],
+        imports: ['javax.persistence.*']
+      },
+      {
+        name: 'dto',
+        suffix: 'DTO',
+        description: '传输层 - 数据传输对象，用于 API 交互',
+        annotations: [],
+        imports: []
+      }
+    ]
   },
+  
   python: {
     ext: '.py',
     srcDir: 'src',
-    defaultPackage: 'app'
+    defaultPackage: 'app',
+    description: 'Python 标准项目结构',
+    layers: [
+      {
+        name: '__init__',
+        suffix: '',
+        description: '包初始化文件',
+        isPackageInit: true
+      },
+      {
+        name: 'routes',
+        suffix: '_routes',
+        description: '路由层 - API 端点定义',
+        imports: ['from flask import Blueprint', 'from . import service']
+      },
+      {
+        name: 'service',
+        suffix: '_service',
+        description: '业务层 - 核心业务逻辑',
+        imports: ['from . import models']
+      },
+      {
+        name: 'models',
+        suffix: '_models',
+        description: '模型层 - 数据模型定义',
+        imports: ['from sqlalchemy import Column', 'from sqlalchemy.ext.declarative import declarative_base']
+      },
+      {
+        name: 'schemas',
+        suffix: '_schemas',
+        description: '模式层 - 数据验证和序列化',
+        imports: ['from marshmallow import Schema', 'from marshmallow import fields']
+      },
+      {
+        name: 'utils',
+        suffix: '_utils',
+        description: '工具层 - 辅助函数',
+        imports: []
+      }
+    ]
   },
+  
   typescript: {
     ext: '.ts',
     srcDir: 'src',
-    defaultPackage: ''
+    defaultPackage: '',
+    description: 'TypeScript/NestJS 模块化架构',
+    layers: [
+      {
+        name: 'controller',
+        suffix: '.controller',
+        description: '控制器 - 处理 HTTP 请求',
+        decorators: ['@Controller()', '@Get()', '@Post()'],
+        imports: ['@nestjs/common']
+      },
+      {
+        name: 'service',
+        suffix: '.service',
+        description: '服务层 - 业务逻辑',
+        decorators: ['@Injectable()'],
+        imports: ['@nestjs/common']
+      },
+      {
+        name: 'module',
+        suffix: '.module',
+        description: '模块定义 - NestJS 模块',
+        decorators: ['@Module()'],
+        imports: ['@nestjs/common']
+      },
+      {
+        name: 'entity',
+        suffix: '.entity',
+        description: '实体 - 数据库模型',
+        decorators: ['@Entity()'],
+        imports: ['typeorm']
+      },
+      {
+        name: 'dto',
+        suffix: '.dto',
+        description: 'DTO - 数据传输对象',
+        decorators: [],
+        imports: ['class-validator', 'class-transformer']
+      },
+      {
+        name: 'interface',
+        suffix: '.interface',
+        description: '接口定义 - TypeScript 类型',
+        decorators: [],
+        imports: []
+      }
+    ]
+  },
+  
+  go: {
+    ext: '.go',
+    srcDir: '',
+    defaultPackage: 'main',
+    description: 'Go 标准项目结构',
+    layers: [
+      {
+        name: 'handler',
+        suffix: '_handler',
+        description: '处理器 - HTTP 处理函数',
+        imports: ['net/http', 'github.com/gin-gonic/gin']
+      },
+      {
+        name: 'service',
+        suffix: '_service',
+        description: '服务层 - 业务逻辑',
+        imports: []
+      },
+      {
+        name: 'repository',
+        suffix: '_repository',
+        description: '仓储层 - 数据访问',
+        imports: ['database/sql', 'gorm.io/gorm']
+      },
+      {
+        name: 'model',
+        suffix: '_model',
+        description: '模型层 - 数据结构定义',
+        imports: ['gorm.io/gorm']
+      },
+      {
+        name: 'dto',
+        suffix: '_dto',
+        description: 'DTO - 数据传输结构',
+        imports: []
+      }
+    ]
   }
 };
 
@@ -38,13 +201,36 @@ function sanitizePackageName(name) {
   return sanitized;
 }
 
+// 工具函数：转换为类名（大驼峰）
+function toClassName(name) {
+  let sanitized = name.replace(/[^\x00-\x7F\s]/g, '');
+  return sanitized
+    .split(/[\s_-]+/)
+    .filter(word => word.length > 0)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join('');
+}
+
 // 检测语言
 function detectLanguage(issueBody) {
   const body = issueBody.toLowerCase();
-  if (body.includes('java') || body.includes('spring') || body.includes('springboot')) return 'java';
-  if (body.includes('python') || body.includes('django') || body.includes('flask')) return 'python';
-  if (body.includes('typescript') || body.includes('nestjs')) return 'typescript';
-  return 'java';
+  if (body.includes('java') || body.includes('spring') || body.includes('springboot') ||
+      body.includes('maven') || body.includes('gradle') || body.includes('jpa')) {
+    return 'java';
+  }
+  if (body.includes('python') || body.includes('django') || body.includes('flask') ||
+      body.includes('fastapi') || body.includes('sqlalchemy')) {
+    return 'python';
+  }
+  if (body.includes('typescript') || body.includes('nestjs') || body.includes('ts') ||
+      body.includes('typeorm') || body.includes('angular')) {
+    return 'typescript';
+  }
+  if (body.includes('go') || body.includes('golang') || body.includes('gin') ||
+      body.includes('beego')) {
+    return 'go';
+  }
+  return 'java'; // 默认 Java
 }
 
 // 调用 DeepSeek API
@@ -97,151 +283,118 @@ async function callDeepSeekAPI(messages, apiKey, maxTokens = 4000) {
   });
 }
 
-// 第一阶段：分析需求，确定文件结构
-async function analyzeRequirements(issueBody, language, apiKey) {
-  const langName = language.toUpperCase();
-  
+// 分析需求，确定需要哪些模块
+async function analyzeModules(issueBody, language, archConfig, apiKey) {
   const messages = [
     {
       role: 'system',
-      content: `You are an expert software architect. Analyze requirements and design the file structure.`
+      content: `You are a software architect specializing in ${archConfig.description}. Analyze requirements and identify modules.`
     },
     {
       role: 'user',
-      content: `Analyze the following requirements and determine the optimal file structure for a ${langName} project.
+      content: `Analyze the following requirements and identify the modules needed for a ${archConfig.description} project.
 
 Requirements:
 ${issueBody}
 
-Please output in the following format:
+The project uses ${language.toUpperCase()} with the following standard layers:
+${archConfig.layers.map(l => `- ${l.name}: ${l.description}`).join('\n')}
 
-## Project Analysis
-Brief description of what needs to be built.
+Output format:
+List 2-5 business modules (e.g., user, order, product, payment).
+For each module:
+1. Module name (English, lowercase, like: user, order, product)
+2. Brief purpose (1 sentence)
+3. Which layers are needed from the standard architecture above
 
-## Suggested Package/Module Structure
-List 2-5 modules/packages needed, with English names only (no Chinese).
-
-For each module, specify:
-1. Module name (English, lowercase, like: user, order, payment)
-2. Purpose (1 sentence)
-3. Files needed in this module (AI decides based on requirements):
-   - For Java: list files like UserController, UserService, UserRepository, UserEntity, etc.
-   - For Python: list files like routes, service, models, utils, etc.
-   - For TypeScript: list files like controller, service, repository, entity, dto, etc.
-   
-   Important: Only list files that are actually needed for this requirement. 
-   Simple CRUD might only need 2-3 files.
-   Complex business logic might need 4-6 files.
-   Let the complexity of requirements determine the number of files.
-
-## Example Output Format:
+Example for Java:
 Module: user
 - Purpose: Handle user registration and authentication
-- Files:
-  1. UserController - REST API endpoints
-  2. UserService - Business logic
-  3. UserRepository - Database access
-  (Only 3 files because requirement is simple)
+- Layers: controller, service, repository, entity (standard CRUD)
 
-Module: payment  
-- Purpose: Handle payment processing
-- Files:
-  1. PaymentController
-  2. PaymentService
-  3. PaymentGateway
-  4. PaymentRepository
-  5. PaymentDto
-  (5 files because payment is complex)
+Module: payment
+- Purpose: Process payments
+- Layers: controller, service, repository, entity, dto (complex, needs DTO)
 
-Analyze carefully and suggest appropriate files based on actual requirements.`
+Be practical - simple modules may not need all layers.`
     }
   ];
 
-  return await callDeepSeekAPI(messages, apiKey, 3000);
+  return await callDeepSeekAPI(messages, apiKey, 2000);
 }
 
-// 解析AI返回的文件结构
-function parseFileStructure(analysis, language) {
+// 解析模块分析结果
+function parseModules(analysis) {
   const modules = [];
   const lines = analysis.split('\n');
   
   let currentModule = null;
-  let currentFiles = [];
   
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    
-    // 检测模块开始
-    if (line.match(/^\s*module[\s:]\s*(.+)/i) || line.match(/^\s*[-*]\s*module[\s:]\s*(.+)/i)) {
-      if (currentModule && currentFiles.length > 0) {
-        modules.push({ ...currentModule, files: currentFiles });
+  for (const line of lines) {
+    if (line.match(/^\s*module[\s:]\s*(\w+)/i)) {
+      if (currentModule) {
+        modules.push(currentModule);
       }
-      
-      const nameMatch = line.match(/module[\s:]\s*(\w+)/i);
+      const match = line.match(/module[\s:]\s*(\w+)/i);
       currentModule = {
-        name: nameMatch ? sanitizePackageName(nameMatch[1]) : 'module',
-        desc: ''
+        name: sanitizePackageName(match[1]),
+        desc: '',
+        layers: []
       };
-      currentFiles = [];
-    }
-    // 检测文件列表
-    else if (currentModule && line.match(/^\s*\d+\.\s*(\w+).*/)) {
-      const fileMatch = line.match(/^\s*\d+\.\s*(\w+).*/);
-      if (fileMatch) {
-        currentFiles.push(fileMatch[1]);
-      }
-    }
-    // 检测模块描述
-    else if (currentModule && line.toLowerCase().includes('purpose')) {
-      const descMatch = line.match(/purpose[:\s]+(.+)/i);
-      if (descMatch) {
-        currentModule.desc = descMatch[1].trim();
+    } else if (currentModule && line.toLowerCase().includes('purpose')) {
+      const match = line.match(/purpose[:\s]+(.+)/i);
+      if (match) currentModule.desc = match[1].trim();
+    } else if (currentModule && line.toLowerCase().includes('layers')) {
+      const match = line.match(/layers[:\s]+(.+)/i);
+      if (match) {
+        currentModule.layers = match[1].split(/[,\s]+/).filter(l => l.length > 0);
       }
     }
   }
   
-  // 添加最后一个模块
-  if (currentModule && currentFiles.length > 0) {
-    modules.push({ ...currentModule, files: currentFiles });
+  if (currentModule) {
+    modules.push(currentModule);
   }
   
-  return modules;
+  return modules.length > 0 ? modules : [{ name: 'main', desc: 'Main module', layers: [] }];
 }
 
-// 第二阶段：为每个文件生成代码
-async function generateFileCode(fileName, moduleName, moduleDesc, language, packageName, issueBody, apiKey) {
-  const langConfig = LANGUAGE_CONFIG[language];
-  const ext = langConfig.ext;
+// 生成特定文件的代码
+async function generateLayerFile(moduleName, layerConfig, language, packageName, issueBody, apiKey) {
+  const className = toClassName(moduleName) + layerConfig.suffix;
+  const fileName = className + LANGUAGE_ARCHITECTURE[language].ext;
   
   const messages = [
     {
       role: 'system',
-      content: `You are an expert ${language} developer. Generate complete, production-ready code.`
+      content: `You are an expert ${language} developer. Generate production-ready code following ${LANGUAGE_ARCHITECTURE[language].description}.`
     },
     {
       role: 'user',
-      content: `Generate complete ${language} code for file: ${fileName}${ext}
+      content: `Generate ${language} code for: ${fileName}
 
 Context:
 - Module: ${moduleName}
-- Module purpose: ${moduleDesc}
+- Layer: ${layerConfig.name}
+- Purpose: ${layerConfig.description}
 - Package/Namespace: ${packageName}
-- Original requirements: ${issueBody}
+- Requirements: ${issueBody}
 
-Generate the complete ${fileName}${ext} file with:
-1. All necessary imports
-2. Complete class/function definition
-3. Proper error handling
-4. Clear comments
-5. Follow ${language} best practices
+Requirements:
+1. Include all necessary imports
+2. Use standard ${language} conventions
+${layerConfig.annotations ? `3. Use annotations: ${layerConfig.annotations.join(', ')}` : ''}
+${layerConfig.decorators ? `3. Use decorators: ${layerConfig.decorators.join(', ')}` : ''}
+4. Add clear comments
+5. Follow ${LANGUAGE_ARCHITECTURE[language].description} best practices
 
-Output only the code, no explanations.`
+Generate complete, compilable code.`
     }
   ];
 
-  const content = await callDeepSeekAPI(messages, apiKey, 2000);
+  const content = await callDeepSeekAPI(messages, apiKey, 2500);
   
-  // 清理 markdown 代码块
+  // 清理 markdown
   return content.replace(/^```\w*\n?/gm, '').replace(/```\s*$/gm, '');
 }
 
@@ -274,94 +427,105 @@ Output only the code, no explanations.`
   }
   
   console.log('\n========================================');
-  console.log('🔧 智能模块化代码生成');
+  console.log('🔧 模块化代码生成 - 标准架构版');
   console.log(`📋 Issue #${issueNumber}`);
   console.log('========================================\n');
   
   // 检测语言
   const language = detectLanguage(issueBody);
-  console.log(`🔤 检测语言: ${language.toUpperCase()}`);
+  const archConfig = LANGUAGE_ARCHITECTURE[language];
   
-  const langConfig = LANGUAGE_CONFIG[language];
+  console.log(`🔤 检测语言: ${language.toUpperCase()}`);
+  console.log(`📐 架构标准: ${archConfig.description}`);
+  console.log(`📚 标准层级: ${archConfig.layers.map(l => l.name).join(', ')}\n`);
+  
   const issueDir = path.join(outDir, `issue-${issueNumber}`);
   fs.mkdirSync(issueDir, { recursive: true });
   
-  // 第一阶段：分析需求，确定文件结构
-  console.log('\n[Phase 1/2] 分析需求，确定文件结构...');
-  const analysis = await analyzeRequirements(issueBody, language, apiKey);
+  // 第一阶段：分析模块
+  console.log('[Phase 1/2] 分析业务模块...');
+  const analysis = await analyzeModules(issueBody, language, archConfig, apiKey);
+  fs.writeFileSync(path.join(issueDir, 'ARCHITECTURE.md'), analysis, 'utf8');
   
-  // 保存分析结果
-  fs.writeFileSync(path.join(issueDir, 'ANALYSIS.md'), analysis, 'utf8');
-  console.log('✅ 需求分析完成\n');
+  const modules = parseModules(analysis);
   
-  // 解析文件结构
-  const modules = parseFileStructure(analysis, language);
+  // 为每个模块确定需要的层级
+  modules.forEach(m => {
+    if (m.layers.length === 0) {
+      // 默认使用所有层级
+      m.layers = archConfig.layers.map(l => l.name);
+    }
+  });
   
-  if (modules.length === 0) {
-    console.log('⚠️  未能解析模块结构，使用默认结构');
-    modules.push({
-      name: 'main',
-      desc: 'Main module',
-      files: language === 'java' ? ['Controller', 'Service'] : ['main']
-    });
-  }
-  
-  console.log(`📦 AI 建议的模块结构:`);
+  console.log(`✅ 识别到 ${modules.length} 个业务模块:\n`);
   modules.forEach((m, i) => {
-    console.log(`\n  ${i + 1}. ${m.name}/`);
+    console.log(`  ${i + 1}. ${m.name}/`);
     console.log(`     描述: ${m.desc || 'N/A'}`);
-    console.log(`     文件数: ${m.files.length}`);
-    m.files.forEach((f, j) => {
-      console.log(`       ${j + 1}. ${f}${langConfig.ext}`);
-    });
+    console.log(`     层级: ${m.layers.join(', ')}`);
   });
   console.log();
   
-  // 第二阶段：生成代码文件
-  console.log('[Phase 2/2] 生成代码文件...\n');
+  // 第二阶段：生成代码
+  console.log('[Phase 2/2] 按标准架构生成代码...\n');
   
   const allFiles = [];
   
   for (let i = 0; i < modules.length; i++) {
     const module = modules[i];
     const modulePackage = sanitizePackageName(module.name);
-    const fullPackage = language === 'java' 
-      ? `${langConfig.defaultPackage}.issue${issueNumber}.${modulePackage}`
-      : modulePackage;
     
     console.log(`[${i + 1}/${modules.length}] 模块: ${module.name}`);
-    console.log(`   包名: ${fullPackage}`);
-    console.log(`   生成 ${module.files.length} 个文件...`);
     
     // 创建包目录
-    const packagePath = language === 'java'
-      ? path.join(issueDir, langConfig.srcDir, ...fullPackage.split('.'))
-      : path.join(issueDir, langConfig.srcDir, modulePackage);
+    let packagePath;
+    if (language === 'java') {
+      const fullPackage = `${archConfig.defaultPackage}.issue${issueNumber}.${modulePackage}`;
+      packagePath = path.join(issueDir, archConfig.srcDir, ...fullPackage.split('.'));
+      console.log(`   包名: ${fullPackage}`);
+    } else {
+      packagePath = path.join(issueDir, archConfig.srcDir, modulePackage);
+      console.log(`   目录: ${archConfig.srcDir}/${modulePackage}`);
+    }
     
     fs.mkdirSync(packagePath, { recursive: true });
     
-    // 为每个文件生成代码
-    for (let j = 0; j < module.files.length; j++) {
-      const fileName = module.files[j];
-      console.log(`   [${j + 1}/${module.files.length}] ${fileName}${langConfig.ext}...`);
+    // 为每个层级生成文件
+    for (const layerName of module.layers) {
+      const layerConfig = archConfig.layers.find(l => l.name === layerName);
+      if (!layerConfig) continue;
+      
+      // 跳过 __init__ 文件生成（Python）
+      if (layerConfig.isPackageInit) {
+        const initPath = path.join(packagePath, '__init__.py');
+        fs.writeFileSync(initPath, `# ${module.name} package\n`, 'utf8');
+        allFiles.push(initPath);
+        console.log(`   ✅ __init__.py`);
+        continue;
+      }
+      
+      const fileName = toClassName(module.name) + layerConfig.suffix + archConfig.ext;
+      console.log(`   生成: ${fileName} (${layerConfig.name})...`);
       
       try {
-        const code = await generateFileCode(
-          fileName,
+        const fullPackageName = language === 'java' 
+          ? `${archConfig.defaultPackage}.issue${issueNumber}.${modulePackage}`
+          : modulePackage;
+          
+        const code = await generateLayerFile(
           module.name,
-          module.desc,
+          layerConfig,
           language,
-          fullPackage,
+          fullPackageName,
           issueBody,
           apiKey
         );
         
-        const filePath = path.join(packagePath, `${fileName}${langConfig.ext}`);
+        const filePath = path.join(packagePath, fileName);
         fs.writeFileSync(filePath, code, 'utf8');
         allFiles.push(filePath);
-        console.log(`       ✅ ${code.length} 字符`);
+        console.log(`      ✅ ${code.length} 字符`);
       } catch (error) {
-        console.error(`       ❌ 生成失败: ${error.message}`);
+        console.error(`      ❌ 失败: ${error.message}`);
       }
     }
     
@@ -371,22 +535,24 @@ Output only the code, no explanations.`
   // 生成 README
   const readmeContent = `# Issue #${issueNumber} - ${language.toUpperCase()} Code Generation
 
-## 项目分析
-AI 根据需求自动设计的模块结构。
+## 架构标准
+${archConfig.description}
+
+## 标准层级
+${archConfig.layers.map(l => `- **${l.name}**: ${l.description}`).join('\n')}
 
 ## 生成的模块
 ${modules.map(m => `
 ### ${m.name}
 - 描述: ${m.desc || 'N/A'}
-- 文件数: ${m.files.length}
-- 文件列表:
-${m.files.map(f => `  - ${f}${langConfig.ext}`).join('\n')}
+- 包含层级: ${m.layers.join(', ')}
 `).join('\n')}
 
 ## 文件统计
 - 模块数: ${modules.length}
 - 文件总数: ${allFiles.length}
 - 语言: ${language.toUpperCase()}
+- 架构: ${archConfig.description}
 
 ## 目录结构
 \`\`\`
@@ -394,17 +560,17 @@ ${allFiles.map(f => path.relative(issueDir, f)).join('\n')}
 \`\`\`
 
 ---
-*Generated by AI-based Modular Code Generator*
+*Generated following ${archConfig.description} standards*
 `;
   
   fs.writeFileSync(path.join(issueDir, 'README.md'), readmeContent, 'utf8');
   
-  // 汇总
   console.log('========================================');
   console.log('✅ 代码生成完成！');
   console.log(`📊 模块数: ${modules.length}`);
   console.log(`📄 文件总数: ${allFiles.length}`);
-  console.log(`📁 输出目录: ${issueDir}`);
+  console.log(`🔤 语言: ${language.toUpperCase()}`);
+  console.log(`📐 架构: ${archConfig.description}`);
   console.log('========================================\n');
   
   process.exit(0);
