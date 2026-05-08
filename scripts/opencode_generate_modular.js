@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 智能模块化代码生成 - 修复版
-// 修复：1. 包名只能是英文 2. 生成完整文件（Controller/Service/Repository/Entity）
+// 智能模块化代码生成 - AI决定文件结构版
+// AI根据需求分析决定：1. 需要哪些模块 2. 每个模块需要哪些文件 3. 文件命名
 // Usage:
 // DEEPSEEK_API_KEY=xxx node scripts/opencode_generate_modular.js --issue-number 42 --issue-body "<text>" --outdir ./auto_impl/issue-42
 
@@ -13,89 +13,37 @@ const LANGUAGE_CONFIG = {
   java: {
     ext: '.java',
     srcDir: 'src/main/java',
-    packageSeparator: '.',
-    defaultPackage: 'com.example',
-    standardFiles: ['Controller', 'Service', 'Repository', 'Entity']
+    defaultPackage: 'com.example'
   },
   python: {
     ext: '.py',
     srcDir: 'src',
-    packageSeparator: '.',
-    defaultPackage: 'app',
-    standardFiles: ['routes', 'service', 'models']
+    defaultPackage: 'app'
   },
   typescript: {
     ext: '.ts',
     srcDir: 'src',
-    packageSeparator: '/',
-    defaultPackage: '',
-    standardFiles: ['controller', 'service', 'repository', 'entity']
+    defaultPackage: ''
   }
 };
 
-// 工具函数：转换为合法的包名（只能是英文、数字、下划线）
+// 工具函数：清理包名（移除非ASCII字符）
 function sanitizePackageName(name) {
-  // 移除所有非 ASCII 字符（中文等）
   let sanitized = name.replace(/[^\x00-\x7F]/g, '');
-  
-  // 转换为小写
   sanitized = sanitized.toLowerCase();
-  
-  // 替换空格和特殊字符为下划线
   sanitized = sanitized.replace(/[\s\-]+/g, '_');
-  
-  // 移除非字母数字下划线的字符
   sanitized = sanitized.replace(/[^a-z0-9_]/g, '');
-  
-  // 如果为空，使用默认值
-  if (!sanitized) {
-    sanitized = 'module';
-  }
-  
-  // 确保以字母开头
-  if (/^\d/.test(sanitized)) {
-    sanitized = 'm_' + sanitized;
-  }
-  
+  if (!sanitized) sanitized = 'module';
+  if (/^\d/.test(sanitized)) sanitized = 'm_' + sanitized;
   return sanitized;
 }
 
-// 工具函数：转换为类名（大驼峰）
-function toClassName(name) {
-  // 移除中文和特殊字符
-  let sanitized = name.replace(/[^\x00-\x7F\s]/g, '');
-  
-  // 按空格、下划线、连字符分割
-  return sanitized
-    .split(/[\s_-]+/)
-    .filter(word => word.length > 0)
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join('');
-}
-
-// 工具函数：检测语言
+// 检测语言
 function detectLanguage(issueBody) {
   const body = issueBody.toLowerCase();
-  
-  // Java 检测
-  if (body.includes('java') || body.includes('spring') || body.includes('springboot') || 
-      body.includes('maven') || body.includes('gradle') || body.includes('jdbc') ||
-      body.includes('jpa') || body.includes('mybatis')) {
-    return 'java';
-  }
-  
-  // Python 检测
-  if (body.includes('python') || body.includes('django') || body.includes('flask') || 
-      body.includes('fastapi')) {
-    return 'python';
-  }
-  
-  // TypeScript 检测
-  if (body.includes('typescript') || body.includes('nestjs') || body.includes('typeorm')) {
-    return 'typescript';
-  }
-  
-  // 默认 Java（适合企业级应用）
+  if (body.includes('java') || body.includes('spring') || body.includes('springboot')) return 'java';
+  if (body.includes('python') || body.includes('django') || body.includes('flask')) return 'python';
+  if (body.includes('typescript') || body.includes('nestjs')) return 'typescript';
   return 'java';
 }
 
@@ -149,10 +97,121 @@ async function callDeepSeekAPI(messages, apiKey, maxTokens = 4000) {
   });
 }
 
-// 生成模块代码
-async function generateModuleCode(moduleName, moduleDesc, language, packageName, issueBody, apiKey) {
+// 第一阶段：分析需求，确定文件结构
+async function analyzeRequirements(issueBody, language, apiKey) {
+  const langName = language.toUpperCase();
+  
+  const messages = [
+    {
+      role: 'system',
+      content: `You are an expert software architect. Analyze requirements and design the file structure.`
+    },
+    {
+      role: 'user',
+      content: `Analyze the following requirements and determine the optimal file structure for a ${langName} project.
+
+Requirements:
+${issueBody}
+
+Please output in the following format:
+
+## Project Analysis
+Brief description of what needs to be built.
+
+## Suggested Package/Module Structure
+List 2-5 modules/packages needed, with English names only (no Chinese).
+
+For each module, specify:
+1. Module name (English, lowercase, like: user, order, payment)
+2. Purpose (1 sentence)
+3. Files needed in this module (AI decides based on requirements):
+   - For Java: list files like UserController, UserService, UserRepository, UserEntity, etc.
+   - For Python: list files like routes, service, models, utils, etc.
+   - For TypeScript: list files like controller, service, repository, entity, dto, etc.
+   
+   Important: Only list files that are actually needed for this requirement. 
+   Simple CRUD might only need 2-3 files.
+   Complex business logic might need 4-6 files.
+   Let the complexity of requirements determine the number of files.
+
+## Example Output Format:
+Module: user
+- Purpose: Handle user registration and authentication
+- Files:
+  1. UserController - REST API endpoints
+  2. UserService - Business logic
+  3. UserRepository - Database access
+  (Only 3 files because requirement is simple)
+
+Module: payment  
+- Purpose: Handle payment processing
+- Files:
+  1. PaymentController
+  2. PaymentService
+  3. PaymentGateway
+  4. PaymentRepository
+  5. PaymentDto
+  (5 files because payment is complex)
+
+Analyze carefully and suggest appropriate files based on actual requirements.`
+    }
+  ];
+
+  return await callDeepSeekAPI(messages, apiKey, 3000);
+}
+
+// 解析AI返回的文件结构
+function parseFileStructure(analysis, language) {
+  const modules = [];
+  const lines = analysis.split('\n');
+  
+  let currentModule = null;
+  let currentFiles = [];
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // 检测模块开始
+    if (line.match(/^\s*module[\s:]\s*(.+)/i) || line.match(/^\s*[-*]\s*module[\s:]\s*(.+)/i)) {
+      if (currentModule && currentFiles.length > 0) {
+        modules.push({ ...currentModule, files: currentFiles });
+      }
+      
+      const nameMatch = line.match(/module[\s:]\s*(\w+)/i);
+      currentModule = {
+        name: nameMatch ? sanitizePackageName(nameMatch[1]) : 'module',
+        desc: ''
+      };
+      currentFiles = [];
+    }
+    // 检测文件列表
+    else if (currentModule && line.match(/^\s*\d+\.\s*(\w+).*/)) {
+      const fileMatch = line.match(/^\s*\d+\.\s*(\w+).*/);
+      if (fileMatch) {
+        currentFiles.push(fileMatch[1]);
+      }
+    }
+    // 检测模块描述
+    else if (currentModule && line.toLowerCase().includes('purpose')) {
+      const descMatch = line.match(/purpose[:\s]+(.+)/i);
+      if (descMatch) {
+        currentModule.desc = descMatch[1].trim();
+      }
+    }
+  }
+  
+  // 添加最后一个模块
+  if (currentModule && currentFiles.length > 0) {
+    modules.push({ ...currentModule, files: currentFiles });
+  }
+  
+  return modules;
+}
+
+// 第二阶段：为每个文件生成代码
+async function generateFileCode(fileName, moduleName, moduleDesc, language, packageName, issueBody, apiKey) {
   const langConfig = LANGUAGE_CONFIG[language];
-  const className = toClassName(moduleName);
+  const ext = langConfig.ext;
   
   const messages = [
     {
@@ -161,65 +220,29 @@ async function generateModuleCode(moduleName, moduleDesc, language, packageName,
     },
     {
       role: 'user',
-      content: `Generate a complete ${language} module for: ${moduleName}
+      content: `Generate complete ${language} code for file: ${fileName}${ext}
 
-Package: ${packageName}
-Description: ${moduleDesc}
-Original requirements: ${issueBody}
+Context:
+- Module: ${moduleName}
+- Module purpose: ${moduleDesc}
+- Package/Namespace: ${packageName}
+- Original requirements: ${issueBody}
 
-Generate EXACTLY these ${language === 'java' ? 4 : 3} files:
-${language === 'java' ? `
-1. ${className}Controller.java - REST API endpoints with @RestController
-2. ${className}Service.java - Business logic with @Service
-3. ${className}Repository.java - Data access with @Repository
-4. ${className}Entity.java - JPA entity with @Entity
-` : `
-1. ${moduleName}_routes.py - API routes
-2. ${moduleName}_service.py - Business logic  
-3. ${moduleName}_models.py - Data models
-`}
+Generate the complete ${fileName}${ext} file with:
+1. All necessary imports
+2. Complete class/function definition
+3. Proper error handling
+4. Clear comments
+5. Follow ${language} best practices
 
-Requirements:
-- Use package: ${packageName}
-- Include all necessary imports
-- Add comprehensive comments
-- Follow ${language} best practices
-- Code must be complete and compilable
-
-Format: Start each file with "===== FILE: Filename.java =====" followed by the code.`
+Output only the code, no explanations.`
     }
   ];
 
-  return await callDeepSeekAPI(messages, apiKey, 4000);
-}
-
-// 解析生成的代码文件
-function parseGeneratedFiles(content, language) {
-  const files = [];
-  const langConfig = LANGUAGE_CONFIG[language];
+  const content = await callDeepSeekAPI(messages, apiKey, 2000);
   
-  // 匹配文件分隔符
-  const filePattern = /=====\s*FILE:\s*(.+?)\s*=====\n?([\s\S]*?)(?======\s*FILE:|$)/g;
-  let match;
-  
-  while ((match = filePattern.exec(content)) !== null) {
-    let fileName = match[1].trim();
-    let fileContent = match[2].trim();
-    
-    // 确保有正确的扩展名
-    if (!fileName.endsWith(langConfig.ext)) {
-      fileName += langConfig.ext;
-    }
-    
-    // 清理 markdown 代码块
-    fileContent = fileContent.replace(/^```\w*\n?/gm, '').replace(/```\s*$/gm, '');
-    
-    if (fileContent.length > 50) {
-      files.push({ name: fileName, content: fileContent });
-    }
-  }
-  
-  return files;
+  // 清理 markdown 代码块
+  return content.replace(/^```\w*\n?/gm, '').replace(/```\s*$/gm, '');
 }
 
 // 主函数
@@ -251,7 +274,7 @@ function parseGeneratedFiles(content, language) {
   }
   
   console.log('\n========================================');
-  console.log('🔧 模块化代码生成（修复版）');
+  console.log('🔧 智能模块化代码生成');
   console.log(`📋 Issue #${issueNumber}`);
   console.log('========================================\n');
   
@@ -260,103 +283,86 @@ function parseGeneratedFiles(content, language) {
   console.log(`🔤 检测语言: ${language.toUpperCase()}`);
   
   const langConfig = LANGUAGE_CONFIG[language];
-  
-  // 创建输出目录
   const issueDir = path.join(outDir, `issue-${issueNumber}`);
   fs.mkdirSync(issueDir, { recursive: true });
   
-  // 提取模块
-  const modules = [];
+  // 第一阶段：分析需求，确定文件结构
+  console.log('\n[Phase 1/2] 分析需求，确定文件结构...');
+  const analysis = await analyzeRequirements(issueBody, language, apiKey);
   
-  // 从 issue body 提取模块（简单实现）
-  const lines = issueBody.split('\n');
-  let currentModule = null;
+  // 保存分析结果
+  fs.writeFileSync(path.join(issueDir, 'ANALYSIS.md'), analysis, 'utf8');
+  console.log('✅ 需求分析完成\n');
   
-  for (const line of lines) {
-    // 匹配 "模块 X:" 或 "X. 模块名"
-    const moduleMatch = line.match(/^(?:模块|\d+\.)\s*[：:]?\s*(.+)/) ||
-                       line.match(/^###?\s*(.+模块.+)/);
-    
-    if (moduleMatch) {
-      if (currentModule) {
-        modules.push(currentModule);
-      }
-      currentModule = {
-        name: moduleMatch[1].trim(),
-        desc: ''
-      };
-    } else if (currentModule && line.trim().startsWith('-')) {
-      currentModule.desc += line.trim() + ' ';
-    }
-  }
+  // 解析文件结构
+  const modules = parseFileStructure(analysis, language);
   
-  if (currentModule) {
-    modules.push(currentModule);
-  }
-  
-  // 如果没提取到模块，创建默认模块
   if (modules.length === 0) {
-    modules.push(
-      { name: 'User', desc: 'User management' },
-      { name: 'Order', desc: 'Order management' }
-    );
+    console.log('⚠️  未能解析模块结构，使用默认结构');
+    modules.push({
+      name: 'main',
+      desc: 'Main module',
+      files: language === 'java' ? ['Controller', 'Service'] : ['main']
+    });
   }
   
-  // 限制模块数量
-  const selectedModules = modules.slice(0, 4);
-  
-  console.log(`📦 识别到 ${selectedModules.length} 个模块:`);
-  selectedModules.forEach((m, i) => {
-    console.log(`  ${i + 1}. ${m.name} - ${m.desc || 'Core module'}`);
+  console.log(`📦 AI 建议的模块结构:`);
+  modules.forEach((m, i) => {
+    console.log(`\n  ${i + 1}. ${m.name}/`);
+    console.log(`     描述: ${m.desc || 'N/A'}`);
+    console.log(`     文件数: ${m.files.length}`);
+    m.files.forEach((f, j) => {
+      console.log(`       ${j + 1}. ${f}${langConfig.ext}`);
+    });
   });
   console.log();
   
-  // 为每个模块生成代码
+  // 第二阶段：生成代码文件
+  console.log('[Phase 2/2] 生成代码文件...\n');
+  
   const allFiles = [];
   
-  for (let i = 0; i < selectedModules.length; i++) {
-    const module = selectedModules[i];
+  for (let i = 0; i < modules.length; i++) {
+    const module = modules[i];
     const modulePackage = sanitizePackageName(module.name);
     const fullPackage = language === 'java' 
       ? `${langConfig.defaultPackage}.issue${issueNumber}.${modulePackage}`
       : modulePackage;
     
-    console.log(`[${i + 1}/${selectedModules.length}] 生成模块: ${module.name}`);
+    console.log(`[${i + 1}/${modules.length}] 模块: ${module.name}`);
     console.log(`   包名: ${fullPackage}`);
+    console.log(`   生成 ${module.files.length} 个文件...`);
     
-    try {
-      const generatedCode = await generateModuleCode(
-        module.name,
-        module.desc,
-        language,
-        fullPackage,
-        issueBody,
-        apiKey
-      );
+    // 创建包目录
+    const packagePath = language === 'java'
+      ? path.join(issueDir, langConfig.srcDir, ...fullPackage.split('.'))
+      : path.join(issueDir, langConfig.srcDir, modulePackage);
+    
+    fs.mkdirSync(packagePath, { recursive: true });
+    
+    // 为每个文件生成代码
+    for (let j = 0; j < module.files.length; j++) {
+      const fileName = module.files[j];
+      console.log(`   [${j + 1}/${module.files.length}] ${fileName}${langConfig.ext}...`);
       
-      const files = parseGeneratedFiles(generatedCode, language);
-      
-      // 创建包目录
-      const packagePath = language === 'java'
-        ? path.join(issueDir, langConfig.srcDir, ...fullPackage.split('.'))
-        : path.join(issueDir, langConfig.srcDir, modulePackage);
-      
-      fs.mkdirSync(packagePath, { recursive: true });
-      
-      // 保存文件
-      for (const file of files) {
-        const filePath = path.join(packagePath, file.name);
-        fs.writeFileSync(filePath, file.content, 'utf8');
+      try {
+        const code = await generateFileCode(
+          fileName,
+          module.name,
+          module.desc,
+          language,
+          fullPackage,
+          issueBody,
+          apiKey
+        );
+        
+        const filePath = path.join(packagePath, `${fileName}${langConfig.ext}`);
+        fs.writeFileSync(filePath, code, 'utf8');
         allFiles.push(filePath);
-        console.log(`   ✅ ${file.name} (${file.content.length} 字符)`);
+        console.log(`       ✅ ${code.length} 字符`);
+      } catch (error) {
+        console.error(`       ❌ 生成失败: ${error.message}`);
       }
-      
-      if (files.length === 0) {
-        console.log(`   ⚠️  未能解析生成文件`);
-      }
-      
-    } catch (error) {
-      console.error(`   ❌ 生成失败: ${error.message}`);
     }
     
     console.log();
@@ -365,22 +371,30 @@ function parseGeneratedFiles(content, language) {
   // 生成 README
   const readmeContent = `# Issue #${issueNumber} - ${language.toUpperCase()} Code Generation
 
-## Generated Modules
-${selectedModules.map(m => `- ${m.name}`).join('\n')}
+## 项目分析
+AI 根据需求自动设计的模块结构。
 
-## Files
-${allFiles.map(f => `- ${path.relative(issueDir, f)}`).join('\n')}
+## 生成的模块
+${modules.map(m => `
+### ${m.name}
+- 描述: ${m.desc || 'N/A'}
+- 文件数: ${m.files.length}
+- 文件列表:
+${m.files.map(f => `  - ${f}${langConfig.ext}`).join('\n')}
+`).join('\n')}
 
-## Package Structure
+## 文件统计
+- 模块数: ${modules.length}
+- 文件总数: ${allFiles.length}
+- 语言: ${language.toUpperCase()}
+
+## 目录结构
 \`\`\`
-${langConfig.srcDir}/
-└── ${langConfig.defaultPackage}/
-    └── issue${issueNumber}/
-${selectedModules.map(m => `        └── ${sanitizePackageName(m.name)}/`).join('\n')}
+${allFiles.map(f => path.relative(issueDir, f)).join('\n')}
 \`\`\`
 
 ---
-*Generated by Modular Code Generator*
+*Generated by AI-based Modular Code Generator*
 `;
   
   fs.writeFileSync(path.join(issueDir, 'README.md'), readmeContent, 'utf8');
@@ -388,8 +402,8 @@ ${selectedModules.map(m => `        └── ${sanitizePackageName(m.name)}/`).
   // 汇总
   console.log('========================================');
   console.log('✅ 代码生成完成！');
-  console.log(`📊 模块数: ${selectedModules.length}`);
-  console.log(`📄 文件数: ${allFiles.length}`);
+  console.log(`📊 模块数: ${modules.length}`);
+  console.log(`📄 文件总数: ${allFiles.length}`);
   console.log(`📁 输出目录: ${issueDir}`);
   console.log('========================================\n');
   
