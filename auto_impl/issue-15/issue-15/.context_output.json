@@ -1,0 +1,14 @@
+{
+  "modify": [
+    "controllers/user_controller.py",
+    "routes/__init__.py",
+    "config.py",
+    "extensions.py"
+  ],
+  "create": [
+    "services/wechat_service.py",
+    "models/wechat_account.py"
+  ],
+  "total": 6,
+  "language": "python"
+}
